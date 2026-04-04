@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { CaughtFish, calculateFreshness } from "@/lib/game-state";
 import { FISH_DATABASE, FishSpecies } from "@/lib/fish-data";
 import { vibrate } from "@/lib/haptics";
-import { playSESlice, playSESell, playSEMiss } from "@/lib/audio";
+import { playSESlice, playSESell, playSEMiss, playSEPrepDone } from "@/lib/audio";
 
 interface CookingGameProps {
   inventory: CaughtFish[];
@@ -239,6 +239,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
 
       if (allDone) {
         vibrate([30, 10, 30, 10, 60]);
+        playSEPrepDone();
       }
 
       return {
