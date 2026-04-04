@@ -36,7 +36,7 @@ export function createInitialState(): GameState {
   return {
     phase: "title",
     day: 1,
-    timeRemaining: 180, // 1日3分
+    timeRemaining: 300, // 1日5分
     brotherMoney: 0,
     youngerMoney: 0,
     totalAssets: 0,
@@ -77,6 +77,6 @@ export const SHOP_RANK_NAMES: Record<ShopRank, string> = {
 // 鮮度計算（時間経過で減少）
 export function calculateFreshness(caughtAt: number, now: number): number {
   const elapsed = (now - caughtAt) / 1000; // 秒
-  const freshness = Math.max(0, 100 - elapsed * 1.5); // 約67秒で0
+  const freshness = Math.max(0, 100 - elapsed * 1.0); // 約100秒で0
   return Math.round(freshness);
 }

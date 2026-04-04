@@ -23,6 +23,10 @@ import ParallaxLayers from "./ParallaxLayers";
 import FishSilhouette from "./FishSilhouette";
 import FightOverlay from "./FightOverlay";
 import CookingGame from "./CookingGame";
+import LoginScreen from "./LoginScreen";
+import RankingBoard from "./RankingBoard";
+import { getPlayer, savePlayer } from "@/lib/player";
+import { saveGame, loadGame, hasSaveData } from "@/lib/save-game";
 import MarketView from "./MarketView";
 
 interface SwimmingFish {
@@ -46,6 +50,9 @@ interface Lure {
 }
 
 export default function FishingGame() {
+  const [playerName, setPlayerName] = useState<string | null>(null);
+  const [showRanking, setShowRanking] = useState(false);
+  const [initialized, setInitialized] = useState(false);
   const [gameState, setGameState] = useState<GameState>(createInitialState);
   const [fishes, setFishes] = useState<SwimmingFish[]>([]);
   const [lure, setLure] = useState<Lure>({ x: 200, y: 250, active: false });
@@ -58,6 +65,29 @@ export default function FishingGame() {
   const [fightTarget, setFightTarget] = useState<SwimmingFish | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const fishIdCounter = useRef(0);
+
+  // 初期化: 既存プレイヤー & セーブデータのロード
+  useEffect(() => {
+    const player = getPlayer();
+    if (player) {
+      setPlayerName(player.name);
+      const save = loadGame();
+      if (save) {
+        setGameState({ ...save.gameState, phase: "title" });
+      }
+    }
+    setInitialized(true);
+  }, []);
+
+  // ログイン処理
+  const handleLogin = (name: string) => {
+    savePlayer(name);
+    setPlayerName(name);
+    const save = loadGame();
+    if (save && save.playerName === name) {
+      setGameState({ ...save.gameState, phase: "title" });
+    }
+  };
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
   // 画面サイズ取得
@@ -95,14 +125,14 @@ export default function FishingGame() {
         stageIndex,
         x: fromLeft ? -40 : dimensions.width + 40,
         y: 80 + Math.random() * (dimensions.height - 160),
-        vx: (fromLeft ? 1 : -1) * (0.3 + Math.random() * 1.0),
-        vy: (Math.random() - 0.5) * 0.4,
+        vx: (fromLeft ? 1 : -1) * (0.2 + Math.random() * 0.6),
+        vy: (Math.random() - 0.5) * 0.25,
         depth: initialDepth,
         vDepth: (Math.random() - 0.3) * 0.008, // やや手前に来る傾向
         spawnTime: Date.now(),
       };
       setFishes((prev) => [...prev, newFish]);
-    }, 1200 + Math.random() * 1800);
+    }, 2000 + Math.random() * 2500);
 
     return () => clearInterval(interval);
   }, [gameState.phase, fishes.length, dimensions]);
@@ -305,28 +335,67 @@ export default function FishingGame() {
   };
 
   const nextDay = () => {
-    setGameState((prev) => ({
-      ...createInitialState(),
-      day: prev.day + 1,
-      brotherMoney: prev.brotherMoney,
-      youngerMoney: prev.youngerMoney,
-      totalAssets: prev.totalAssets,
-      shopRank: prev.shopRank,
-      phase: "fishing",
-    }));
+    setGameState((prev) => {
+      const next = {
+        ...createInitialState(),
+        day: prev.day + 1,
+        brotherMoney: prev.brotherMoney,
+        youngerMoney: prev.youngerMoney,
+        totalAssets: prev.totalAssets,
+        shopRank: prev.shopRank,
+        phase: "fishing" as const,
+      };
+      // オートセーブ
+      if (playerName) saveGame(next, playerName);
+      return next;
+    });
     setFishes([]);
     setRipples([]);
   };
 
+  // ランキング送信（リザルト画面表示時）
+  const submitRanking = useCallback(() => {
+    if (!playerName) return;
+    fetch("/api/rankings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: playerName,
+        totalAssets: gameState.totalAssets,
+        shopRank: gameState.shopRank,
+        day: gameState.day,
+      }),
+    }).catch(() => {});
+  }, [playerName, gameState.totalAssets, gameState.shopRank, gameState.day]);
+
+  // --- 初期化中 ---
+  if (!initialized) return null;
+
+  // --- ログイン画面 ---
+  if (!playerName) {
+    return (
+      <LoginScreen
+        onLogin={handleLogin}
+        hasSave={hasSaveData()}
+        savedName={getPlayer()?.name}
+      />
+    );
+  }
+
+  // --- ランキング画面 ---
+  if (showRanking) {
+    return <RankingBoard playerName={playerName} onClose={() => setShowRanking(false)} />;
+  }
+
   // --- タイトル画面 ---
   if (gameState.phase === "title") {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-sky-400 to-blue-900 text-white px-4">
-        <div className="text-center">
+      <div className="flex flex-col items-center min-h-screen bg-gradient-to-b from-sky-400 to-blue-900 text-white px-4 py-8 overflow-y-auto">
+        <div className="text-center w-full">
           <h1 className="text-4xl font-bold mb-2 tracking-wide">
-            🐟 出世魚兄弟
+            🐟 Angler & Artisan
           </h1>
-          <p className="text-lg text-blue-200 mb-1">Shusse-Uo Brothers</p>
+          <p className="text-lg text-blue-200 mb-1">釣り師と寿司職人</p>
           <p className="text-sm text-blue-300 mb-8">
             漁師の兄 × 寿司職人の弟
           </p>
@@ -334,7 +403,7 @@ export default function FishingGame() {
           <div className="bg-white/10 backdrop-blur rounded-xl p-5 mb-6 text-left text-sm max-w-sm mx-auto">
             <p className="mb-2">
               <Fish className="inline w-4 h-4 mr-1" />
-              <strong>兄（漁師）:</strong> 魚影をタップして釣り上げろ！
+              <strong>兄（漁師）:</strong> 魚影をタップして出世魚を釣り上げろ！
             </p>
             <p className="mb-2">
               <Anchor className="inline w-4 h-4 mr-1" />
@@ -346,20 +415,64 @@ export default function FishingGame() {
             </p>
           </div>
 
-          <div className="bg-white/10 backdrop-blur rounded-lg p-3 mb-8 text-xs max-w-sm mx-auto">
-            <p className="font-semibold mb-1">🔥 コノシロの逆転ロジック</p>
-            <p className="text-blue-200">
-              シンコ（稚魚）は超高単価！小さいほどレアで価値が高い！
-            </p>
+          {/* 出世魚図鑑 */}
+          <div className="bg-white/10 backdrop-blur rounded-xl p-4 mb-6 text-left text-xs max-w-sm mx-auto">
+            <h3 className="font-bold text-sm text-center mb-3">🐟 出世魚図鑑</h3>
+            <div className="space-y-2.5">
+              <div>
+                <p className="font-bold text-blue-200">ブリ <span className="font-normal text-blue-300/70">（大物）</span></p>
+                <p className="text-blue-300">ワカシ → イナダ → ワラサ → <span className="text-yellow-300 font-bold">ブリ</span></p>
+                <p className="text-blue-400 mt-0.5">大きいほど高単価。最終段階は高値の花</p>
+              </div>
+              <div>
+                <p className="font-bold text-green-200">スズキ <span className="font-normal text-green-300/70">（夏の王者）</span></p>
+                <p className="text-blue-300">セイゴ → フッコ → <span className="text-yellow-300 font-bold">スズキ</span></p>
+                <p className="text-blue-400 mt-0.5">夏場（6〜8月）は価格1.5倍ボーナス！</p>
+              </div>
+              <div>
+                <p className="font-bold text-cyan-200">マイワシ <span className="font-normal text-cyan-300/70">（軍艦の星）</span></p>
+                <p className="text-blue-300"><span className="text-yellow-300 font-bold">シラス</span> → カエリ → イワシ</p>
+                <p className="text-blue-400 mt-0.5">シラスは軍艦ネタで高単価。小さいほど美味</p>
+              </div>
+              <div>
+                <p className="font-bold text-amber-200">サワラ <span className="font-normal text-amber-300/70">（炙りの至宝）</span></p>
+                <p className="text-blue-300">サゴシ → ナギ → <span className="text-yellow-300 font-bold">サワラ</span></p>
+                <p className="text-blue-400 mt-0.5">炙り加工で寿司価格が跳ね上がる</p>
+              </div>
+              <div className="bg-yellow-400/10 rounded-lg p-2 -mx-1">
+                <p className="font-bold text-yellow-200">🔥 コノシロ <span className="font-normal text-yellow-300/70">（逆転の超レア）</span></p>
+                <p className="text-blue-300"><span className="text-yellow-300 font-bold">シンコ</span> → コハダ → ナカズミ → コノシロ</p>
+                <p className="text-yellow-400 mt-0.5 font-semibold">小さいほど超高単価！シンコは最高値 ¥5,000</p>
+              </div>
+            </div>
           </div>
 
-          <button
-            onClick={startGame}
-            className="bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-10 rounded-full text-lg shadow-lg transition-all hover:scale-105 active:scale-95"
-          >
-            出航する
-            <ChevronRight className="inline w-5 h-5 ml-1" />
-          </button>
+          {/* プレイヤー名 & セーブ情報 */}
+          <div className="bg-white/10 backdrop-blur rounded-lg p-2 mb-4 text-sm max-w-sm mx-auto">
+            <span className="text-blue-200">プレイヤー: </span>
+            <span className="font-bold">{playerName}</span>
+            {gameState.day > 1 && (
+              <span className="text-blue-300 ml-2">
+                （{gameState.day}日目 / ¥{gameState.totalAssets.toLocaleString()}）
+              </span>
+            )}
+          </div>
+
+          <div className="flex gap-3 justify-center max-w-sm mx-auto">
+            <button
+              onClick={startGame}
+              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-6 rounded-full text-lg shadow-lg transition-all hover:scale-105 active:scale-95"
+            >
+              {gameState.day > 1 ? "続きから" : "出航する"}
+              <ChevronRight className="inline w-5 h-5 ml-1" />
+            </button>
+            <button
+              onClick={() => setShowRanking(true)}
+              className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-5 rounded-full shadow-lg transition-all hover:scale-105 active:scale-95"
+            >
+              <Trophy className="inline w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -419,13 +532,23 @@ export default function FishingGame() {
           )}
         </div>
 
-        <button
-          onClick={nextDay}
-          className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-all hover:scale-105 active:scale-95"
-        >
-          {gameState.day + 1}日目へ
-          <ChevronRight className="inline w-5 h-5 ml-1" />
-        </button>
+        <div className="flex gap-3 w-full max-w-sm">
+          <button
+            onClick={() => { submitRanking(); nextDay(); }}
+            className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-full shadow-lg transition-all hover:scale-105 active:scale-95"
+          >
+            {gameState.day + 1}日目へ
+            <ChevronRight className="inline w-5 h-5 ml-1" />
+          </button>
+          <button
+            onClick={() => { submitRanking(); setShowRanking(true); }}
+            className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-5 rounded-full shadow-lg transition-all hover:scale-105 active:scale-95"
+          >
+            <Trophy className="inline w-5 h-5" />
+          </button>
+        </div>
+
+        <p className="text-gray-400 text-xs mt-3">スコアは自動でランキングに送信されます</p>
       </div>
     );
   }

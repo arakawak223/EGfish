@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "出世魚兄弟 - Shusse-Uo Brothers",
-  description: "漁師の兄と寿司職人の弟が協力する経済×アクションゲーム",
+  title: "Angler & Artisan - 釣り師と寿司職人",
+  description: "釣り師と寿司職人が協力する経済×アクションゲーム",
 };
 
 export default function RootLayout({
