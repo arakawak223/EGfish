@@ -2,10 +2,11 @@
 export type SpeedLevel = "slow" | "normal" | "fast";
 
 // 釣りの針回転速度倍率。現状実装が「遅め」基準なので slow=1.0
+// 体感が遅めという要望で 3段階すべてを底上げ
 export const FISHING_SPEED_MULT: Record<SpeedLevel, number> = {
-  slow: 1.0,
-  normal: 1.4,
-  fast: 1.8,
+  slow: 1.35,
+  normal: 1.75,
+  fast: 2.25,
 };
 
 // 調理のカット速度に対応する「時間倍率」。

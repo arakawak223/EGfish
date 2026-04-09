@@ -16,62 +16,40 @@ interface CookingGameProps {
 }
 
 type PrepState = "idle" | "cutting" | "done";
-// trace: 曲線をなぞる / connect: 順番にノードをつなぐ / timing: リズムに合わせてゲートを通す
-type GuideType = "trace" | "connect" | "timing";
 
-// 「つなぐ」用の通過ノード（関節）
-interface Waypoint {
-  x: number;
-  y: number;
-  order: number;
-  hit: boolean;
-}
-
-// 「タイミング合わせ」用のゲート（曲線上に配置、openAt〜closeAtの間だけ通過可能）
-interface TimingGate {
-  x: number;
-  y: number;
-  openAt: number;  // 区間開始からのms
-  closeAt: number;
-  hit: boolean;
-}
-
-// ガイドパス: すべて曲線ベース。タイプごとに追加要素を持つ
-interface GuidePath {
-  type: GuideType;
-  samples: { x: number; y: number }[]; // パスをサンプリングした点列
-  svgPath: string; // SVG描画用 d属性
-  waypoints?: Waypoint[]; // connect用
-  gates?: TimingGate[];   // timing用
-  visited?: boolean[]; // samples各点を通過したか（進行中のみ使う、完了時リセット）
+// 一閃さばき: 魚体に矢印の直線が1〜3本。始点から終点へ一気にスワイプして断つ。
+// 難度が上がると本数が増える（1本=頭落とし / 2本=二枚 / 3本=三枚おろし）。
+interface Slash {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  label: string;
   completed: boolean;
-  accuracy: number;  // 0~1
-  speedBonus: number; // 0~1, 速度ジャスト度
-  modeScore: number;  // 0~1, connect/timingの達成率 (trace=1)
+  accuracy: number;   // 0~1 方向×直線度×カバレッジ
+  speedScore: number; // 0~1 決断力（速いほど良い）
 }
 
 interface PrepProgress {
   fishId: string;
-  guides: GuidePath[];
-  currentGuide: number;
+  slashes: Slash[];
+  currentSlash: number;
   state: PrepState;
   avgAccuracy: number;
-  maxCombo: number; // 最大連続一筆コンボ
-  perfect: boolean; // 全ガイド一筆貫通フラグ
+  perfect: boolean;
 }
 
-// 進行中のカット状態（ref管理・handleCutMove中に変更するためstate化しない）
+// 進行中のスワイプ状態（ref管理・handleCutMove中に変更するためstate化しない）
 interface ActiveCutState {
   fishId: string;
-  currentGuide: number;
-  segmentStartIdx: number; // drawPoints内の現ガイド開始点
+  slashIndex: number;
+  slashesSnapshot: Slash[];
+  totalSlashes: number;
   segmentStartTime: number;
-  comboCount: number;
-  guidesSnapshot: GuidePath[]; // 生成されたガイド
-  totalGuides: number;
+  segmentStartIdx: number; // drawPoints内の現スラッシュ開始点
   accumulatedAccuracy: number;
-  accumulatedSpeedBonus: number;
-  accumulatedModeScore: number;
+  accumulatedSpeedScore: number;
+  completedCount: number;
 }
 
 // 限定メニュー: カウンターに出した寿司
@@ -92,162 +70,30 @@ const AREA_W = 280;
 const AREA_H = 140;
 const MARGIN = 22;
 
-// 線分をサンプリング
-function sampleLine(x1: number, y1: number, x2: number, y2: number, steps = 16) {
-  const arr: { x: number; y: number }[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    arr.push({ x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t });
+// 魚ごとに一閃さばきのラインを生成。常に左→右の水平カット。
+// 本数は難度で決まる: 1本=頭落とし / 2本=二枚おろし / 3本=三枚おろし
+function generateSlashes(difficulty: number): Slash[] {
+  const left = MARGIN;
+  const right = AREA_W - MARGIN;
+  const cy = AREA_H / 2;
+  const mk = (dy: number, label: string): Slash => ({
+    startX: left,
+    startY: cy + dy,
+    endX: right,
+    endY: cy + dy,
+    label,
+    completed: false,
+    accuracy: 0,
+    speedScore: 0,
+  });
+
+  if (difficulty < 0.45) {
+    return [mk(0, "一閃")];
   }
-  return arr;
-}
-
-// 3次ベジェをサンプリング
-function sampleCubic(
-  p0: { x: number; y: number },
-  p1: { x: number; y: number },
-  p2: { x: number; y: number },
-  p3: { x: number; y: number },
-  steps = 28
-) {
-  const arr: { x: number; y: number }[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const u = 1 - t;
-    const x =
-      u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x;
-    const y =
-      u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y;
-    arr.push({ x, y });
+  if (difficulty < 0.8) {
+    return [mk(-22, "上身"), mk(22, "下身")];
   }
-  return arr;
-}
-
-// パスの全長
-function pathLength(samples: { x: number; y: number }[]) {
-  let len = 0;
-  for (let i = 1; i < samples.length; i++) {
-    len += Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y);
-  }
-  return len;
-}
-
-// 魚ごとにガイドを生成:
-//   すべての筋は曲線（S字/弧）ベース。難易度で trace / connect / timing を混ぜる
-//   timeMultiplier で timing ゲートの拍と窓をスケール（大きいほどゆっくり・通しやすい）
-function generateGuides(difficulty: number, timeMultiplier: number = 1): GuidePath[] {
-  const count = 1 + Math.floor(difficulty * 2); // 1〜3本
-  const guides: GuidePath[] = [];
-
-  const pickType = (idx: number): GuideType => {
-    const r = (Math.random() + idx * 0.17) % 1;
-    if (difficulty < 0.5) {
-      // 初級: なぞる中心、少しだけつなぐ
-      return r < 0.85 ? "trace" : "connect";
-    }
-    if (difficulty < 0.8) {
-      // 中級: なぞる主体、つなぐ少々、タイミングはごく稀
-      if (r < 0.6) return "trace";
-      if (r < 0.9) return "connect";
-      return "timing";
-    }
-    // 上級: 三種だがtrace優先
-    if (r < 0.5) return "trace";
-    if (r < 0.8) return "connect";
-    return "timing";
-  };
-
-  for (let i = 0; i < count; i++) {
-    const yBase = MARGIN + ((AREA_H - MARGIN * 2) / (count + 1)) * (i + 1);
-    const type = pickType(i);
-    const len = AREA_W * 0.78;
-    const startX = (AREA_W - len) / 2;
-    const x1 = startX;
-    const x2 = startX + len;
-
-    // 共通: 緩やかなS字 or 弧。なぞりやすい振幅に抑える
-    const amp = 14 + Math.random() * 12; // 14〜26px
-    const dir = Math.random() < 0.5 ? 1 : -1;
-    const sShape = Math.random() < 0.7; // S字優先
-    const p0 = { x: x1, y: yBase };
-    const p3 = { x: x2, y: yBase };
-    const p1 = { x: x1 + len * 0.22, y: yBase + dir * amp };
-    const p2 = { x: x1 + len * 0.78, y: yBase + (sShape ? -dir : dir) * amp };
-    const samples = sampleCubic(p0, p1, p2, p3, 48);
-    const svgPath = `M ${p0.x} ${p0.y} C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ${p3.x} ${p3.y}`;
-
-    const base: GuidePath = {
-      type,
-      samples,
-      svgPath,
-      completed: false,
-      accuracy: 0,
-      speedBonus: 0,
-      modeScore: 1,
-    };
-
-    if (type === "connect") {
-      // 3〜4個の関節を曲線上に均等配置、順番につなぐ
-      const nodeCount = 3 + Math.floor(Math.random() * 2);
-      const waypoints: Waypoint[] = [];
-      for (let n = 0; n < nodeCount; n++) {
-        const t = (n + 1) / (nodeCount + 1);
-        const sIdx = Math.round(t * (samples.length - 1));
-        waypoints.push({
-          x: samples[sIdx].x,
-          y: samples[sIdx].y,
-          order: n,
-          hit: false,
-        });
-      }
-      base.waypoints = waypoints;
-      base.modeScore = 0;
-    } else if (type === "timing") {
-      // 2個のタイミングゲート。ゆったりした拍＆広い窓で通しやすく
-      // timeMultiplier で拍・窓・オフセットを拡大
-      const gateCount = 2;
-      const gates: TimingGate[] = [];
-      const beat = (650 + Math.random() * 200) * timeMultiplier; // 拍の長さ(ms)
-      const offset = 450 * timeMultiplier; // 最初のゲートまで余裕を持たせる
-      const halfWindow = 380 * timeMultiplier; // 窓の半幅
-      for (let g = 0; g < gateCount; g++) {
-        const t = (g + 1) / (gateCount + 1);
-        const sIdx = Math.round(t * (samples.length - 1));
-        const center = offset + g * beat;
-        gates.push({
-          x: samples[sIdx].x,
-          y: samples[sIdx].y,
-          openAt: center - halfWindow,
-          closeAt: center + halfWindow,
-          hit: false,
-        });
-      }
-      base.gates = gates;
-      base.modeScore = 0;
-    }
-
-    guides.push(base);
-  }
-  return guides;
-}
-
-// 点から折れ線への最短距離
-function distToPolyline(px: number, py: number, samples: { x: number; y: number }[]) {
-  let min = Infinity;
-  for (let i = 1; i < samples.length; i++) {
-    const a = samples[i - 1];
-    const b = samples[i];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const lenSq = dx * dx + dy * dy || 1;
-    let t = ((px - a.x) * dx + (py - a.y) * dy) / lenSq;
-    t = Math.max(0, Math.min(1, t));
-    const cx = a.x + dx * t;
-    const cy = a.y + dy * t;
-    const d = Math.hypot(px - cx, py - cy);
-    if (d < min) min = d;
-  }
-  return min;
+  return [mk(-34, "上身"), mk(0, "中骨"), mk(34, "下身")];
 }
 
 export default function CookingGame({ inventory, marketTrend, onSell, timeMultiplier = 1, paused = false }: CookingGameProps) {
@@ -258,22 +104,8 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
   const [drawPoints, setDrawPoints] = useState<{ x: number; y: number; t: number }[]>([]);
   const [counter, setCounter] = useState<CounterItem[]>([]);
   const [flash, setFlash] = useState<{ fishId: string; kind: "combo" | "perfect" | "bone"; at: number } | null>(null);
-  // タイミングゲートのアニメ用: 描画中はrAFで毎フレーム更新
-  const [, setTick] = useState(0);
   const activeRectRef = useRef<DOMRect | null>(null);
   const activeCutRef = useRef<ActiveCutState | null>(null);
-
-  // カット中はrAFでtickを進め、timingゲートのビジュアルを更新
-  useEffect(() => {
-    if (!activeCut || paused) return;
-    let raf = 0;
-    const loop = () => {
-      setTick((t) => (t + 1) & 0xffff);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [activeCut, paused]);
 
   // 一時停止中にカット中だった場合はキャンセルしておく（指を離した扱い）
   useEffect(() => {
@@ -362,54 +194,61 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
     return { x: clientX - rect.left, y: clientY - rect.top };
   };
 
-  // 区間を確定して精度/速度ボーナスを計算
-  const finalizeSegment = useCallback((
+  // 1本のスラッシュを確定して精度/速さを計算
+  const finalizeSlash = useCallback((
     active: ActiveCutState,
     segmentPoints: { x: number; y: number; t: number }[],
   ) => {
-    const guide = active.guidesSnapshot[active.currentGuide];
-    if (!guide || segmentPoints.length < 2) return null;
+    const slash = active.slashesSnapshot[active.slashIndex];
+    if (!slash || segmentPoints.length < 2) return null;
 
-    // 平均距離 → なぞり精度
-    let totalDist = 0;
-    for (const pt of segmentPoints) {
-      totalDist += distToPolyline(pt.x, pt.y, guide.samples);
+    const first = segmentPoints[0];
+    const last = segmentPoints[segmentPoints.length - 1];
+    const playerDX = last.x - first.x;
+    const playerDY = last.y - first.y;
+    const playerLen = Math.hypot(playerDX, playerDY);
+    if (playerLen < 20) return null;
+
+    const targetDX = slash.endX - slash.startX;
+    const targetDY = slash.endY - slash.startY;
+    const targetLen = Math.hypot(targetDX, targetDY);
+
+    // 方向一致度 (コサイン類似度、負ならゼロ)
+    const dot = (playerDX * targetDX + playerDY * targetDY) / (playerLen * targetLen);
+    const directionScore = Math.max(0, dot);
+
+    // 直線度: 端点直線距離 / 実描画長 (曲がりが少ないほど 1 に近い)
+    let totalDrawn = 0;
+    for (let i = 1; i < segmentPoints.length; i++) {
+      totalDrawn += Math.hypot(
+        segmentPoints[i].x - segmentPoints[i - 1].x,
+        segmentPoints[i].y - segmentPoints[i - 1].y,
+      );
     }
-    const avgDist = totalDist / segmentPoints.length;
-    // 許容ズレを広げ、多少外れても並以上を取りやすく
-    let accuracy = Math.max(0, Math.min(1, 1 - avgDist / 75));
+    const straightRatio = playerLen / Math.max(totalDrawn, 1);
+    // 0.55 を下限、0.95 を上限として 0〜1 に正規化。ちょっとブレても上物以上は取れる
+    const straightnessScore = Math.max(0, Math.min(1, (straightRatio - 0.55) / 0.4));
 
-    // モード別達成度（つなぐ = ノード通過率、タイミング = ゲート通過率）
-    let modeScore = 1;
-    if (guide.waypoints && guide.waypoints.length > 0) {
-      const hits = guide.waypoints.filter((w) => w.hit).length;
-      modeScore = hits / guide.waypoints.length;
-    } else if (guide.gates && guide.gates.length > 0) {
-      const hits = guide.gates.filter((g) => g.hit).length;
-      modeScore = hits / guide.gates.length;
-    }
-    // モード達成度を精度に反映: ベースを高めにして、未達でも過度に落とさない
-    // 達成度0でも精度の55%、達成度1で100%
-    accuracy = accuracy * (0.55 + modeScore * 0.45);
+    // カバレッジ: 目標長のどれだけをカバーしたか
+    const coverageScore = Math.min(1, playerLen / targetLen);
 
-    // 速度ジャスト判定: 理想 = pathLen * 3ms/px * 時間倍率 (大きいほどゆっくり基準)
-    const idealMs = pathLength(guide.samples) * 3 * timeMultiplier;
-    const elapsedMs = segmentPoints[segmentPoints.length - 1].t - segmentPoints[0].t;
-    const ratio = elapsedMs / idealMs;
-    // ジャスト帯を広く (0.4〜2.0)、外れても緩やかに減衰
-    let speedBonus: number;
-    if (ratio >= 0.4 && ratio <= 2.0) {
-      speedBonus = 1;
-    } else if (ratio < 0.4) {
-      speedBonus = Math.max(0.3, ratio / 0.4);
-    } else {
-      speedBonus = Math.max(0.3, 1 - (ratio - 2.0) / 3.0);
-    }
+    // 総合精度: 方向を基軸に、直線度とカバレッジで重み付け
+    const accuracy = Math.max(0, Math.min(1,
+      directionScore * (0.25 + 0.35 * straightnessScore + 0.40 * coverageScore)
+    ));
 
-    return { accuracy, speedBonus, modeScore };
+    // 速さ: 理想時間内なら満点、超えたらゆるやかに減衰（決断力を評価）
+    const idealMs = targetLen * 3 * timeMultiplier;
+    const elapsedMs = last.t - first.t;
+    const speedScore =
+      elapsedMs <= idealMs
+        ? 1
+        : Math.max(0.3, 1 - (elapsedMs - idealMs) / (idealMs * 2));
+
+    return { accuracy, speedScore };
   }, [timeMultiplier]);
 
-  // カット開始
+  // カット開始: 現スラッシュの始点近傍でのみ反応（誤タップ防止）
   const handleCutStart = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
     const target = e.currentTarget as HTMLElement;
     activeRectRef.current = target.getBoundingClientRect();
@@ -418,37 +257,38 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
     const pos = toRelative(client.x, client.y);
     if (!pos) return;
 
-    // 既存のガイドを再利用（部分完了の継続）、なければ生成
     const existing = prepProgress[fish.id];
     const fishData = FISH_DATABASE[fish.species];
     const stage = fishData.stages[fish.stageIndex];
-    const guides = existing?.guides ?? generateGuides(stage.prepDifficulty, timeMultiplier);
-    const startGuide = existing?.currentGuide ?? 0;
+    const slashes = existing?.slashes ?? generateSlashes(stage.prepDifficulty);
+    const startIdx = existing?.currentSlash ?? 0;
+    if (startIdx >= slashes.length) return;
 
-    // guidesをディープコピー（waypoints/gatesのhit状態もリセット）
-    const snapshot: GuidePath[] = guides.map((g) => ({
-      ...g,
-      waypoints: g.waypoints?.map((w) => ({ ...w, hit: g.completed ? w.hit : false })),
-      gates: g.gates?.map((ga) => ({ ...ga, hit: g.completed ? ga.hit : false })),
-    }));
+    // 現スラッシュの始点から一定以上離れていたら反応しない
+    const current = slashes[startIdx];
+    const distToStart = Math.hypot(pos.x - current.startX, pos.y - current.startY);
+    if (distToStart > 42) return;
+
+    const snapshot: Slash[] = slashes.map((s) => ({ ...s }));
 
     activeCutRef.current = {
       fishId: fish.id,
-      currentGuide: startGuide,
-      segmentStartIdx: 0,
+      slashIndex: startIdx,
+      slashesSnapshot: snapshot,
+      totalSlashes: snapshot.length,
       segmentStartTime: performance.now(),
-      comboCount: 0,
-      guidesSnapshot: snapshot,
-      totalGuides: guides.length,
-      accumulatedAccuracy: existing?.guides.filter((g) => g.completed).reduce((s, g) => s + g.accuracy, 0) ?? 0,
-      accumulatedSpeedBonus: existing?.guides.filter((g) => g.completed).reduce((s, g) => s + g.speedBonus, 0) ?? 0,
-      accumulatedModeScore: existing?.guides.filter((g) => g.completed).reduce((s, g) => s + g.modeScore, 0) ?? 0,
+      segmentStartIdx: 0,
+      accumulatedAccuracy:
+        existing?.slashes.filter((s) => s.completed).reduce((a, s) => a + s.accuracy, 0) ?? 0,
+      accumulatedSpeedScore:
+        existing?.slashes.filter((s) => s.completed).reduce((a, s) => a + s.speedScore, 0) ?? 0,
+      completedCount: existing?.slashes.filter((s) => s.completed).length ?? 0,
     };
     setActiveCut(fish.id);
     setDrawPoints([{ ...pos, t: performance.now() }]);
-  }, [prepProgress, timeMultiplier]);
+  }, [prepProgress]);
 
-  // カット中: カバレッジ達成で自動的に次ガイドへ（一筆書きコンボ）
+  // ドラッグ中: 終点近傍に達したら自動確定して次のスラッシュへ
   const handleCutMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     const active = activeCutRef.current;
     if (!active) return;
@@ -460,101 +300,65 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
 
     setDrawPoints((prev) => {
       const next = [...prev, { ...pos, t: now }];
-      const guide = active.guidesSnapshot[active.currentGuide];
+      const slash = active.slashesSnapshot[active.slashIndex];
+      if (!slash) return next;
 
-      // つなぐ: 次のノードに触れたら順次点灯（判定半径を拡大）
-      if (guide?.waypoints) {
-        const nextWp = guide.waypoints.find((w) => !w.hit);
-        if (nextWp && Math.hypot(pos.x - nextWp.x, pos.y - nextWp.y) < 22) {
-          nextWp.hit = true;
-          vibrate([10]);
-        }
-      }
+      const distToEnd = Math.hypot(pos.x - slash.endX, pos.y - slash.endY);
+      const segPts = next.slice(active.segmentStartIdx);
 
-      // タイミング合わせ: 窓が開いている間にゲート位置に触れたらヒット（半径拡大）
-      if (guide?.gates) {
-        const elapsed = now - active.segmentStartTime;
-        for (const gate of guide.gates) {
-          if (gate.hit) continue;
-          const near = Math.hypot(pos.x - gate.x, pos.y - gate.y) < 26;
-          const inWindow = elapsed >= gate.openAt && elapsed <= gate.closeAt;
-          if (near && inWindow) {
-            gate.hit = true;
+      if (distToEnd < 32 && segPts.length >= 3) {
+        const result = finalizeSlash(active, segPts);
+        if (result) {
+          slash.completed = true;
+          slash.accuracy = result.accuracy;
+          slash.speedScore = result.speedScore;
+          active.accumulatedAccuracy += result.accuracy;
+          active.accumulatedSpeedScore += result.speedScore;
+          active.completedCount += 1;
+          active.slashIndex += 1;
+          active.segmentStartIdx = next.length - 1;
+          active.segmentStartTime = now;
+
+          playSESlice();
+          if (result.accuracy > 0.75 && result.speedScore > 0.8) {
+            vibrate([15, 5, 35]);
+            setFlash({ fishId: active.fishId, kind: "combo", at: now });
+          } else {
             vibrate([12]);
           }
-        }
-      }
 
-      // 自動確定判定: 現ガイドの終点近傍 & カバレッジ十分
-      if (guide) {
-        const endSample = guide.samples[guide.samples.length - 1];
-        const distToEnd = Math.hypot(pos.x - endSample.x, pos.y - endSample.y);
-        const segPts = next.slice(active.segmentStartIdx);
-        const startPt = segPts[0];
-        const spanX = Math.abs(pos.x - startPt.x);
-        const guideSpanX = Math.abs(endSample.x - guide.samples[0].x);
-        const coverage = guideSpanX > 0 ? spanX / guideSpanX : 0;
+          // 全スラッシュ完了
+          if (active.slashIndex >= active.totalSlashes) {
+            const avgAcc = active.accumulatedAccuracy / active.totalSlashes;
+            const avgSpeed = active.accumulatedSpeedScore / active.totalSlashes;
+            const perfect = avgAcc >= 0.85 && avgSpeed >= 0.85;
+            const combinedAcc = Math.min(1, avgAcc * (0.7 + 0.3 * avgSpeed) * (perfect ? 1.1 : 1));
 
-        if (distToEnd < 30 && coverage > 0.65 && segPts.length >= 3) {
-          // 確定！
-          const result = finalizeSegment(active, segPts);
-          if (result) {
-            const g = active.guidesSnapshot[active.currentGuide];
-            g.completed = true;
-            g.accuracy = result.accuracy;
-            g.speedBonus = result.speedBonus;
-            g.modeScore = result.modeScore;
-            active.accumulatedAccuracy += result.accuracy;
-            active.accumulatedSpeedBonus += result.speedBonus;
-            active.accumulatedModeScore += result.modeScore;
-            active.comboCount += 1;
-            active.currentGuide += 1;
-            active.segmentStartIdx = next.length - 1; // 新区間開始
-            active.segmentStartTime = now;
-
-            playSESlice();
-            if (result.accuracy > 0.8 && result.speedBonus > 0.8) {
-              vibrate([15, 5, 35]);
-              setFlash({ fishId: active.fishId, kind: "combo", at: now });
-            } else {
-              vibrate([12]);
-            }
-
-            // 全ガイド完了
-            if (active.currentGuide >= active.totalGuides) {
-              const perfect = active.comboCount === active.totalGuides;
-              const avgAcc = active.accumulatedAccuracy / active.totalGuides;
-              const avgSpeed = active.accumulatedSpeedBonus / active.totalGuides;
-              // 速度ボーナスを精度に融合（0.5〜1.0の重み）
-              const combinedAcc = Math.min(1, avgAcc * (0.7 + 0.3 * avgSpeed) * (perfect ? 1.15 : 1));
-
-              setPrepProgress((prev) => ({
-                ...prev,
-                [active.fishId]: {
-                  fishId: active.fishId,
-                  guides: active.guidesSnapshot.map((g) => ({ ...g })),
-                  currentGuide: active.totalGuides,
-                  state: "done",
-                  avgAccuracy: combinedAcc,
-                  maxCombo: active.comboCount,
-                  perfect,
-                },
-              }));
-              vibrate([30, 10, 30, 10, 60]);
-              playSEPrepDone();
-              if (perfect) setFlash({ fishId: active.fishId, kind: "perfect", at: now });
-              activeCutRef.current = null;
-              setActiveCut(null);
-              return [];
-            }
+            setPrepProgress((prevP) => ({
+              ...prevP,
+              [active.fishId]: {
+                fishId: active.fishId,
+                slashes: active.slashesSnapshot.map((s) => ({ ...s })),
+                currentSlash: active.totalSlashes,
+                state: "done",
+                avgAccuracy: combinedAcc,
+                perfect,
+              },
+            }));
+            vibrate([30, 10, 30, 10, 60]);
+            playSEPrepDone();
+            if (perfect) setFlash({ fishId: active.fishId, kind: "perfect", at: now });
+            activeCutRef.current = null;
+            setActiveCut(null);
+            return [];
           }
         }
       }
       return next;
     });
-  }, [finalizeSegment]);
+  }, [finalizeSlash]);
 
-  // 指離し: 未完了なら部分結果を保存、コンボはリセット
+  // 指離し: 未完了なら部分進捗を保存
   const handleCutEnd = useCallback(() => {
     const active = activeCutRef.current;
     if (!active) {
@@ -563,21 +367,19 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
       return;
     }
 
-    // 完了済みガイドだけで進捗保存
-    const completedCount = active.currentGuide;
-    if (completedCount > 0) {
-      const avgAcc = active.accumulatedAccuracy / completedCount;
-      const avgSpeed = active.accumulatedSpeedBonus / completedCount;
+    const completed = active.completedCount;
+    if (completed > 0) {
+      const avgAcc = active.accumulatedAccuracy / completed;
+      const avgSpeed = active.accumulatedSpeedScore / completed;
       const combinedAcc = Math.min(1, avgAcc * (0.7 + 0.3 * avgSpeed));
       setPrepProgress((prev) => ({
         ...prev,
         [active.fishId]: {
           fishId: active.fishId,
-          guides: active.guidesSnapshot.map((g) => ({ ...g })),
-          currentGuide: completedCount,
-          state: completedCount >= active.totalGuides ? "done" : "cutting",
+          slashes: active.slashesSnapshot.map((s) => ({ ...s })),
+          currentSlash: completed,
+          state: completed >= active.totalSlashes ? "done" : "cutting",
           avgAccuracy: combinedAcc,
-          maxCombo: Math.max(prev[active.fishId]?.maxCombo ?? 0, active.comboCount),
           perfect: prev[active.fishId]?.perfect ?? false,
         },
       }));
@@ -718,9 +520,9 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
           const instantPrice = Math.round(fish.sushiPrice * trendMult * freshMult * qualityMult);
           const premiumPrice = Math.round(fish.sushiPrice * trendMult * freshMult * 2.0 * qualityMultPremium);
 
-          // ガイド線の初期化
-          const guides = prep?.guides ?? generateGuides(stage.prepDifficulty, timeMultiplier);
-          const currentGuideIdx = prep?.currentGuide ?? 0;
+          // 一閃さばきラインの初期化
+          const slashes = prep?.slashes ?? generateSlashes(stage.prepDifficulty);
+          const currentSlashIdx = prep?.currentSlash ?? 0;
 
           return (
             <div
@@ -799,115 +601,70 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                     </div>
                   </div>
 
-                  {/* ガイド線 */}
+                  {/* 一閃さばきライン */}
                   <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                    {guides.map((guide, i) => {
-                      const isCurrent = i === currentGuideIdx;
-                      const stroke = guide.completed
-                        ? guide.accuracy > 0.7 ? "rgba(34,197,94,0.65)" : guide.accuracy > 0.4 ? "rgba(234,179,8,0.55)" : "rgba(239,68,68,0.45)"
-                        : isCurrent ? "rgba(59,130,246,0.75)" : "rgba(0,0,0,0.12)";
-                      const strokeWidth = guide.completed ? 3 : isCurrent ? 2.5 : 1.5;
-                      const startPt = guide.samples[0];
-                      const endPt = guide.samples[guide.samples.length - 1];
-                      const midPt = guide.samples[Math.floor(guide.samples.length / 2)];
-
-                      // timingゲートのアニメ: 現在のガイドならsegmentStartTimeからの経過を使う
-                      const activeRef = activeCutRef.current;
-                      const elapsed = isCurrent && activeRef && activeRef.fishId === fish.id
-                        ? performance.now() - activeRef.segmentStartTime
-                        : 0;
-
+                    {slashes.map((slash, i) => {
+                      const isCurrent = i === currentSlashIdx;
+                      const isCompleted = slash.completed;
+                      const color = isCompleted
+                        ? slash.accuracy > 0.7 ? "#22c55e" : slash.accuracy > 0.4 ? "#eab308" : "#ef4444"
+                        : isCurrent ? "#3b82f6" : "#94a3b8";
+                      const opacity = isCompleted ? 0.9 : isCurrent ? 1 : 0.35;
+                      const midX = (slash.startX + slash.endX) / 2;
                       return (
-                        <g key={i}>
-                          {/* ガイド曲線本体 */}
-                          <path
-                            d={guide.svgPath}
-                            fill="none"
-                            stroke={stroke}
-                            strokeWidth={strokeWidth}
-                            strokeDasharray={guide.completed ? "none" : "6,4"}
+                        <g key={i} opacity={opacity}>
+                          {/* ガイド線本体 */}
+                          <line
+                            x1={slash.startX} y1={slash.startY}
+                            x2={slash.endX - 8} y2={slash.endY}
+                            stroke={color}
+                            strokeWidth={isCurrent ? 3.5 : isCompleted ? 3 : 2.5}
+                            strokeDasharray={isCompleted ? "none" : "8,5"}
                             strokeLinecap="round"
                           />
-
-                          {/* 始点・終点マーカー */}
-                          {!guide.completed && isCurrent && (
-                            <>
-                              <circle cx={startPt.x} cy={startPt.y} r={5} fill="rgba(59,130,246,0.6)" />
-                              <circle cx={endPt.x} cy={endPt.y} r={5} fill="rgba(59,130,246,0.6)" />
-                            </>
-                          )}
-
-                          {/* つなぐ: 関節ノード */}
-                          {guide.waypoints?.map((w, wi) => (
-                            <g key={`w${wi}`}>
-                              <circle
-                                cx={w.x} cy={w.y}
-                                r={w.hit ? 7 : 6}
-                                fill={w.hit ? "rgba(34,197,94,0.85)" : "rgba(255,255,255,0.9)"}
-                                stroke={w.hit ? "#16a34a" : isCurrent ? "#2563eb" : "#9ca3af"}
-                                strokeWidth={1.5}
-                              />
-                              <text
-                                x={w.x} y={w.y + 3}
-                                textAnchor="middle"
-                                fontSize={9}
-                                fontWeight="bold"
-                                fill={w.hit ? "#fff" : "#374151"}
-                              >
-                                {w.order + 1}
-                              </text>
-                            </g>
-                          ))}
-
-                          {/* タイミング: リズムゲート */}
-                          {guide.gates?.map((gate, gi) => {
-                            const open = isCurrent && elapsed >= gate.openAt && elapsed <= gate.closeAt && !gate.hit;
-                            const closed = isCurrent && elapsed > gate.closeAt && !gate.hit;
-                            const fill = gate.hit
-                              ? "rgba(234,179,8,0.9)"
-                              : closed
-                              ? "rgba(239,68,68,0.35)"
-                              : open
-                              ? "rgba(234,179,8,0.75)"
-                              : "rgba(255,255,255,0.85)";
-                            const r = open ? 10 : 7;
-                            const strokeColor = gate.hit ? "#ca8a04" : closed ? "#ef4444" : open ? "#eab308" : isCurrent ? "#2563eb" : "#9ca3af";
-                            return (
-                              <g key={`g${gi}`}>
-                                {open && (
-                                  <circle
-                                    cx={gate.x} cy={gate.y}
-                                    r={14}
-                                    fill="none"
-                                    stroke="rgba(234,179,8,0.6)"
-                                    strokeWidth={2}
-                                  />
-                                )}
-                                <circle
-                                  cx={gate.x} cy={gate.y}
-                                  r={r}
-                                  fill={fill}
-                                  stroke={strokeColor}
-                                  strokeWidth={1.8}
-                                />
-                                {gate.hit && (
-                                  <text x={gate.x} y={gate.y + 3} textAnchor="middle" fontSize={9} fontWeight="bold" fill="#fff">♪</text>
-                                )}
-                              </g>
-                            );
-                          })}
-
-                          {/* 完了マーク */}
-                          {guide.completed && (
+                          {/* 終点矢印 */}
+                          <polygon
+                            points={`${slash.endX - 10},${slash.endY - 7} ${slash.endX},${slash.endY} ${slash.endX - 10},${slash.endY + 7}`}
+                            fill={color}
+                          />
+                          {/* 始点マーカー（現在ならパルスで指示） */}
+                          <circle
+                            cx={slash.startX} cy={slash.startY}
+                            r={isCurrent ? 11 : isCompleted ? 7 : 6}
+                            fill={isCompleted ? color : isCurrent ? "#dbeafe" : "#fff"}
+                            stroke={color}
+                            strokeWidth={2}
+                            className={isCurrent ? "animate-pulse" : undefined}
+                          />
+                          <text
+                            x={slash.startX} y={slash.startY + 3.5}
+                            textAnchor="middle"
+                            fontSize={10}
+                            fontWeight="bold"
+                            fill={isCompleted ? "#fff" : isCurrent ? "#1e40af" : color}
+                          >
+                            {i + 1}
+                          </text>
+                          {/* ラベル or 完了マーク */}
+                          {isCompleted ? (
                             <text
-                              x={midPt.x}
-                              y={midPt.y - 10}
+                              x={midX} y={slash.startY - 8}
                               textAnchor="middle"
-                              fontSize={11}
-                              fill={guide.accuracy > 0.7 ? "#22c55e" : guide.accuracy > 0.4 ? "#eab308" : "#ef4444"}
+                              fontSize={12}
                               fontWeight="bold"
+                              fill={color}
                             >
-                              {guide.accuracy > 0.7 ? "✨" : guide.accuracy > 0.4 ? "○" : "△"}
+                              {slash.accuracy > 0.7 ? "✨" : slash.accuracy > 0.4 ? "○" : "△"}
+                            </text>
+                          ) : (
+                            <text
+                              x={midX} y={slash.startY - 7}
+                              textAnchor="middle"
+                              fontSize={9}
+                              fill={color}
+                              opacity={isCurrent ? 0.9 : 0.55}
+                            >
+                              {slash.label}
                             </text>
                           )}
                         </g>
@@ -919,8 +676,8 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                       <polyline
                         points={drawPoints.map((p) => `${p.x},${p.y}`).join(" ")}
                         fill="none"
-                        stroke="rgba(220, 50, 50, 0.7)"
-                        strokeWidth={2}
+                        stroke="rgba(220, 50, 50, 0.75)"
+                        strokeWidth={3}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       />
@@ -931,13 +688,9 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                   <div className="absolute bottom-1 left-0 right-0 text-center">
                     <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
                       {(() => {
-                        const g = guides[currentGuideIdx];
-                        if (!g) return `${currentGuideIdx + 1}/${guides.length}`;
-                        const label =
-                          g.type === "connect" ? "① → ② → ③ 順につなげ" :
-                          g.type === "timing"  ? "光る瞬間に ♪ ゲートを通せ" :
-                                                  "曲線に沿って一息でなぞれ";
-                        return `${label}（${currentGuideIdx + 1}/${guides.length}）`;
+                        const s = slashes[currentSlashIdx];
+                        if (!s) return `${currentSlashIdx + 1}/${slashes.length}`;
+                        return `「${s.label}」を一気に右へ引け（${currentSlashIdx + 1}/${slashes.length}）`;
                       })()}
                     </span>
                   </div>
