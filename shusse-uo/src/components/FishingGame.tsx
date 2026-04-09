@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Fish, Anchor, Timer, Waves, Trophy, ChevronRight } from "lucide-react";
+import { Fish, Anchor, Timer, Waves, Trophy, ChevronRight, Pause, Play, Settings } from "lucide-react";
 import {
   FishSpecies,
   FISH_DATABASE,
@@ -28,6 +28,16 @@ import RankingBoard from "./RankingBoard";
 import { getPlayer, savePlayer } from "@/lib/player";
 import { saveGame, loadGame, hasSaveData } from "@/lib/save-game";
 import MarketView from "./MarketView";
+import {
+  GameSettings,
+  SpeedLevel,
+  DEFAULT_SETTINGS,
+  loadSettings,
+  saveSettings,
+  FISHING_SPEED_MULT,
+  COOKING_TIME_MULT,
+  SPEED_LABEL,
+} from "@/lib/game-settings";
 
 interface SwimmingFish {
   id: string;
@@ -63,8 +73,45 @@ export default function FishingGame() {
     success: boolean;
   } | null>(null);
   const [fightTarget, setFightTarget] = useState<SwimmingFish | null>(null);
+  const [settings, setSettings] = useState<GameSettings>(DEFAULT_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paused, setPaused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const fishIdCounter = useRef(0);
+  const pauseStartRef = useRef<number | null>(null);
+
+  // 設定ロード
+  useEffect(() => {
+    setSettings(loadSettings());
+  }, []);
+
+  const updateSettings = useCallback((partial: Partial<GameSettings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...partial };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
+
+  // 一時停止の開始/終了で、鮮度計算に影響する caughtAt / spawnTime をシフト
+  useEffect(() => {
+    if (paused) {
+      pauseStartRef.current = Date.now();
+      return;
+    }
+    if (pauseStartRef.current != null) {
+      const delta = Date.now() - pauseStartRef.current;
+      pauseStartRef.current = null;
+      if (delta > 0) {
+        setGameState((prev) => ({
+          ...prev,
+          inventory: prev.inventory.map((f) => ({ ...f, caughtAt: f.caughtAt + delta })),
+          catches: prev.catches.map((f) => ({ ...f, caughtAt: f.caughtAt + delta })),
+        }));
+        setFishes((prev) => prev.map((f) => ({ ...f, spawnTime: f.spawnTime + delta })));
+      }
+    }
+  }, [paused]);
 
   // 初期化: 既存プレイヤー & セーブデータのロード
   useEffect(() => {
@@ -112,7 +159,7 @@ export default function FishingGame() {
 
   // 魚のスポーン
   useEffect(() => {
-    if (gameState.phase !== "fishing") return;
+    if (gameState.phase !== "fishing" || paused) return;
     const interval = setInterval(() => {
       if (fishes.length >= 6) return;
       const species = rollFishSpecies();
@@ -135,11 +182,11 @@ export default function FishingGame() {
     }, 2000 + Math.random() * 2500);
 
     return () => clearInterval(interval);
-  }, [gameState.phase, fishes.length, dimensions]);
+  }, [gameState.phase, fishes.length, dimensions, paused]);
 
   // 魚の移動アニメーション
   useEffect(() => {
-    if (gameState.phase !== "fishing") return;
+    if (gameState.phase !== "fishing" || paused) return;
     const frame = setInterval(() => {
       setFishes((prev) =>
         prev
@@ -166,11 +213,12 @@ export default function FishingGame() {
       );
     }, 32);
     return () => clearInterval(frame);
-  }, [gameState.phase, dimensions]);
+  }, [gameState.phase, dimensions, paused]);
 
   // タイマー
   useEffect(() => {
     if (gameState.phase !== "fishing" && gameState.phase !== "cooking") return;
+    if (paused) return;
     const timer = setInterval(() => {
       setGameState((prev) => {
         const newTime = prev.timeRemaining - 1;
@@ -182,12 +230,12 @@ export default function FishingGame() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [gameState.phase]);
+  }, [gameState.phase, paused]);
 
   // 水面クリック: ルアー投入
   const handleWaterClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-      if (gameState.phase !== "fishing" || fightTarget) return;
+      if (gameState.phase !== "fishing" || fightTarget || paused) return;
 
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -249,7 +297,7 @@ export default function FishingGame() {
         }
       }
     },
-    [gameState.phase, fishes, fightTarget]
+    [gameState.phase, fishes, fightTarget, paused]
   );
 
   // ファイト成功: 魚をキャッチ
@@ -458,6 +506,25 @@ export default function FishingGame() {
             )}
           </div>
 
+          {/* 速度設定 */}
+          <div className="bg-white/10 backdrop-blur rounded-xl p-4 mb-4 text-left max-w-sm mx-auto">
+            <h3 className="font-bold text-sm text-center mb-3">⚙️ 速度設定</h3>
+            <SpeedPicker
+              label="🎣 釣りの回転速度"
+              value={settings.fishingSpeed}
+              onChange={(v) => updateSettings({ fishingSpeed: v })}
+            />
+            <div className="h-2" />
+            <SpeedPicker
+              label="🍣 さばきのカット速度"
+              value={settings.cookingSpeed}
+              onChange={(v) => updateSettings({ cookingSpeed: v })}
+            />
+            <p className="text-[10px] text-blue-300/80 mt-2 text-center">
+              プレイ中でも ⚙ ボタンから変更できます
+            </p>
+          </div>
+
           <div className="flex gap-3 justify-center max-w-sm mx-auto">
             <button
               onClick={startGame}
@@ -555,7 +622,7 @@ export default function FishingGame() {
 
   // --- メインゲーム画面（釣り / 調理 / 市場） ---
   return (
-    <div className="flex flex-col h-screen bg-gray-900 overflow-hidden">
+    <div className="flex flex-col h-screen bg-gray-900 overflow-hidden relative">
       {/* ヘッダー */}
       <div className="bg-gray-800 text-white px-3 py-2 flex items-center justify-between text-sm shrink-0">
         <div className="flex items-center gap-3">
@@ -566,9 +633,25 @@ export default function FishingGame() {
             {String(gameState.timeRemaining % 60).padStart(2, "0")}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <span className="text-blue-300">🎣 ¥{gameState.brotherMoney.toLocaleString()}</span>
           <span className="text-red-300">🍣 ¥{gameState.youngerMoney.toLocaleString()}</span>
+          <button
+            onClick={() => setPaused((p) => !p)}
+            className="bg-gray-700 hover:bg-gray-600 rounded-md p-1.5 ml-1 active:scale-95 transition-all"
+            title={paused ? "再開" : "一時停止"}
+            aria-label={paused ? "再開" : "一時停止"}
+          >
+            {paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="bg-gray-700 hover:bg-gray-600 rounded-md p-1.5 active:scale-95 transition-all"
+            title="設定"
+            aria-label="設定"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -720,6 +803,8 @@ export default function FishingGame() {
                 fishY={fightTarget.y}
                 onSuccess={handleFightSuccess}
                 onFail={handleFightFail}
+                speedMultiplier={FISHING_SPEED_MULT[settings.fishingSpeed]}
+                paused={paused}
               />
             )}
 
@@ -740,6 +825,8 @@ export default function FishingGame() {
             inventory={gameState.inventory.filter((f) => !f.processed)}
             marketTrend={gameState.marketTrend}
             onSell={handleSell}
+            timeMultiplier={COOKING_TIME_MULT[settings.cookingSpeed]}
+            paused={paused}
           />
         )}
 
@@ -752,6 +839,122 @@ export default function FishingGame() {
       <div className="bg-gray-800 text-center text-xs text-amber-400 py-1 shrink-0">
         🏪 {SHOP_RANK_NAMES[gameState.shopRank]} | 合計資産: ¥
         {gameState.totalAssets.toLocaleString()}
+      </div>
+
+      {/* 一時停止オーバーレイ */}
+      {paused && (
+        <div className="absolute inset-0 z-40 bg-black/70 flex items-center justify-center">
+          <div className="bg-gray-800 text-white rounded-2xl shadow-2xl p-6 max-w-xs w-[85%] text-center">
+            <Pause className="w-10 h-10 mx-auto mb-2 text-yellow-300" />
+            <h3 className="text-xl font-bold mb-1">一時停止中</h3>
+            <p className="text-xs text-gray-400 mb-4">
+              タイマー・魚・カウンターは停止しています
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => setPaused(false)}
+                className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 rounded-lg active:scale-95 transition-all"
+              >
+                <Play className="inline w-4 h-4 mr-1" />
+                再開
+              </button>
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg text-sm active:scale-95 transition-all"
+              >
+                <Settings className="inline w-4 h-4 mr-1" />
+                設定を変更
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 設定モーダル */}
+      {settingsOpen && (
+        <div
+          className="absolute inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            className="bg-white text-gray-800 rounded-2xl shadow-2xl p-5 max-w-sm w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold">⚙️ 速度設定</h3>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="text-gray-400 hover:text-gray-700 text-2xl leading-none"
+                aria-label="閉じる"
+              >
+                ×
+              </button>
+            </div>
+            <SpeedPicker
+              label="🎣 釣りの回転速度"
+              value={settings.fishingSpeed}
+              onChange={(v) => updateSettings({ fishingSpeed: v })}
+              dark={false}
+            />
+            <div className="h-3" />
+            <SpeedPicker
+              label="🍣 さばきのカット速度"
+              value={settings.cookingSpeed}
+              onChange={(v) => updateSettings({ cookingSpeed: v })}
+              dark={false}
+            />
+            <p className="text-xs text-gray-500 mt-3 text-center">
+              変更はすぐに反映されます
+            </p>
+            <button
+              onClick={() => setSettingsOpen(false)}
+              className="w-full mt-4 bg-blue-500 hover:bg-blue-600 text-white py-2.5 rounded-lg font-bold active:scale-95 transition-all"
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 速度選択ピッカー: タイトル / 設定モーダル共通
+function SpeedPicker({
+  label,
+  value,
+  onChange,
+  dark = true,
+}: {
+  label: string;
+  value: SpeedLevel;
+  onChange: (v: SpeedLevel) => void;
+  dark?: boolean;
+}) {
+  const levels: SpeedLevel[] = ["slow", "normal", "fast"];
+  return (
+    <div>
+      <p className={`text-xs mb-1 ${dark ? "text-blue-200" : "text-gray-600"}`}>{label}</p>
+      <div className="flex gap-1.5">
+        {levels.map((lv) => {
+          const active = lv === value;
+          const base = "flex-1 py-2 rounded-lg text-sm font-bold transition-all active:scale-95";
+          const activeCls = dark
+            ? "bg-orange-500 text-white shadow"
+            : "bg-blue-500 text-white shadow";
+          const inactiveCls = dark
+            ? "bg-white/10 text-blue-100 hover:bg-white/20"
+            : "bg-gray-100 text-gray-600 hover:bg-gray-200";
+          return (
+            <button
+              key={lv}
+              onClick={() => onChange(lv)}
+              className={`${base} ${active ? activeCls : inactiveCls}`}
+            >
+              {SPEED_LABEL[lv]}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

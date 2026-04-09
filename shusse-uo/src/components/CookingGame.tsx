@@ -10,6 +10,9 @@ interface CookingGameProps {
   inventory: CaughtFish[];
   marketTrend: Partial<Record<FishSpecies, number>>;
   onSell: (fishId: string, price: number) => void;
+  // 時間倍率: 大きいほど「ゆっくり」= タイミング窓が広く、理想カット時間が長い
+  timeMultiplier?: number;
+  paused?: boolean;
 }
 
 type PrepState = "idle" | "cutting" | "done";
@@ -131,7 +134,8 @@ function pathLength(samples: { x: number; y: number }[]) {
 
 // 魚ごとにガイドを生成:
 //   すべての筋は曲線（S字/弧）ベース。難易度で trace / connect / timing を混ぜる
-function generateGuides(difficulty: number): GuidePath[] {
+//   timeMultiplier で timing ゲートの拍と窓をスケール（大きいほどゆっくり・通しやすい）
+function generateGuides(difficulty: number, timeMultiplier: number = 1): GuidePath[] {
   const count = 1 + Math.floor(difficulty * 2); // 1〜3本
   const guides: GuidePath[] = [];
 
@@ -200,10 +204,12 @@ function generateGuides(difficulty: number): GuidePath[] {
       base.modeScore = 0;
     } else if (type === "timing") {
       // 2個のタイミングゲート。ゆったりした拍＆広い窓で通しやすく
+      // timeMultiplier で拍・窓・オフセットを拡大
       const gateCount = 2;
       const gates: TimingGate[] = [];
-      const beat = 650 + Math.random() * 200; // 拍の長さ(ms) ゆったり
-      const offset = 450; // 最初のゲートまで余裕を持たせる
+      const beat = (650 + Math.random() * 200) * timeMultiplier; // 拍の長さ(ms)
+      const offset = 450 * timeMultiplier; // 最初のゲートまで余裕を持たせる
+      const halfWindow = 380 * timeMultiplier; // 窓の半幅
       for (let g = 0; g < gateCount; g++) {
         const t = (g + 1) / (gateCount + 1);
         const sIdx = Math.round(t * (samples.length - 1));
@@ -211,8 +217,8 @@ function generateGuides(difficulty: number): GuidePath[] {
         gates.push({
           x: samples[sIdx].x,
           y: samples[sIdx].y,
-          openAt: center - 380, // 窓を広く (760ms)
-          closeAt: center + 380,
+          openAt: center - halfWindow,
+          closeAt: center + halfWindow,
           hit: false,
         });
       }
@@ -244,7 +250,7 @@ function distToPolyline(px: number, py: number, samples: { x: number; y: number 
   return min;
 }
 
-export default function CookingGame({ inventory, marketTrend, onSell }: CookingGameProps) {
+export default function CookingGame({ inventory, marketTrend, onSell, timeMultiplier = 1, paused = false }: CookingGameProps) {
   const [prepProgress, setPrepProgress] = useState<Record<string, PrepProgress>>({});
   const [freshness, setFreshness] = useState<Record<string, number>>({});
   const [sellMode, setSellMode] = useState<string | null>(null);
@@ -259,7 +265,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
 
   // カット中はrAFでtickを進め、timingゲートのビジュアルを更新
   useEffect(() => {
-    if (!activeCut) return;
+    if (!activeCut || paused) return;
     let raf = 0;
     const loop = () => {
       setTick((t) => (t + 1) & 0xffff);
@@ -267,10 +273,36 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [activeCut]);
+  }, [activeCut, paused]);
+
+  // 一時停止中にカット中だった場合はキャンセルしておく（指を離した扱い）
+  useEffect(() => {
+    if (paused && activeCutRef.current) {
+      activeCutRef.current = null;
+      setActiveCut(null);
+      setDrawPoints([]);
+    }
+  }, [paused]);
+
+  // 一時停止から復帰したときにカウンターの placedAt を遅延分シフト
+  const pauseStartRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (paused) {
+      pauseStartRef.current = Date.now();
+      return;
+    }
+    if (pauseStartRef.current != null) {
+      const delta = Date.now() - pauseStartRef.current;
+      pauseStartRef.current = null;
+      if (delta > 0) {
+        setCounter((prev) => prev.map((item) => ({ ...item, placedAt: item.placedAt + delta })));
+      }
+    }
+  }, [paused]);
 
   // 鮮度更新
   useEffect(() => {
+    if (paused) return;
     const interval = setInterval(() => {
       const now = Date.now();
       const updated: Record<string, number> = {};
@@ -280,10 +312,11 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
       setFreshness(updated);
     }, 500);
     return () => clearInterval(interval);
-  }, [inventory]);
+  }, [inventory, paused]);
 
   // カウンターの客到着 & 期限切れチェック
   useEffect(() => {
+    if (paused) return;
     const interval = setInterval(() => {
       const now = Date.now();
       setCounter((prev) => {
@@ -311,7 +344,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
       });
     }, 300);
     return () => clearInterval(interval);
-  }, [onSell]);
+  }, [onSell, paused]);
 
   const getClientPos = (e: React.MouseEvent | React.TouchEvent) => {
     if ("touches" in e && e.touches.length > 0) {
@@ -359,8 +392,8 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
     // 達成度0でも精度の55%、達成度1で100%
     accuracy = accuracy * (0.55 + modeScore * 0.45);
 
-    // 速度ジャスト判定: 理想 = pathLen * 3ms/px (ゆっくり目が基準)
-    const idealMs = pathLength(guide.samples) * 3;
+    // 速度ジャスト判定: 理想 = pathLen * 3ms/px * 時間倍率 (大きいほどゆっくり基準)
+    const idealMs = pathLength(guide.samples) * 3 * timeMultiplier;
     const elapsedMs = segmentPoints[segmentPoints.length - 1].t - segmentPoints[0].t;
     const ratio = elapsedMs / idealMs;
     // ジャスト帯を広く (0.4〜2.0)、外れても緩やかに減衰
@@ -374,7 +407,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
     }
 
     return { accuracy, speedBonus, modeScore };
-  }, []);
+  }, [timeMultiplier]);
 
   // カット開始
   const handleCutStart = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
@@ -389,7 +422,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
     const existing = prepProgress[fish.id];
     const fishData = FISH_DATABASE[fish.species];
     const stage = fishData.stages[fish.stageIndex];
-    const guides = existing?.guides ?? generateGuides(stage.prepDifficulty);
+    const guides = existing?.guides ?? generateGuides(stage.prepDifficulty, timeMultiplier);
     const startGuide = existing?.currentGuide ?? 0;
 
     // guidesをディープコピー（waypoints/gatesのhit状態もリセット）
@@ -413,7 +446,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
     };
     setActiveCut(fish.id);
     setDrawPoints([{ ...pos, t: performance.now() }]);
-  }, [prepProgress]);
+  }, [prepProgress, timeMultiplier]);
 
   // カット中: カバレッジ達成で自動的に次ガイドへ（一筆書きコンボ）
   const handleCutMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
@@ -686,7 +719,7 @@ export default function CookingGame({ inventory, marketTrend, onSell }: CookingG
           const premiumPrice = Math.round(fish.sushiPrice * trendMult * freshMult * 2.0 * qualityMultPremium);
 
           // ガイド線の初期化
-          const guides = prep?.guides ?? generateGuides(stage.prepDifficulty);
+          const guides = prep?.guides ?? generateGuides(stage.prepDifficulty, timeMultiplier);
           const currentGuideIdx = prep?.currentGuide ?? 0;
 
           return (

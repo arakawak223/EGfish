@@ -12,6 +12,8 @@ interface FightOverlayProps {
   fishY: number;
   onSuccess: () => void;
   onFail: () => void;
+  speedMultiplier?: number;
+  paused?: boolean;
 }
 
 // タイミングリング: 回転する針を「当たりゾーン」で止める
@@ -22,6 +24,8 @@ export default function FightOverlay({
   fishY,
   onSuccess,
   onFail,
+  speedMultiplier = 1,
+  paused = false,
 }: FightOverlayProps) {
   const fishData = FISH_DATABASE[species];
   const stage = fishData.stages[stageIndex];
@@ -39,8 +43,8 @@ export default function FightOverlay({
   const [sweetSpotAngle, setSweetSpotAngle] = useState(() => Math.random() * 360);
   // 当たりゾーンの幅（難度で変わる）
   const sweetSpotSize = 70 - difficulty * 35; // 70度〜35度
-  // 回転速度（難度で変わる）
-  const speed = 1.2 + difficulty * 1.5; // deg/frame
+  // 回転速度（難度で変わる）: 基準値に外部からの倍率を掛ける
+  const speed = (1.2 + difficulty * 1.5) * speedMultiplier; // deg/frame
 
   // 判定中フラグ
   const [judging, setJudging] = useState(false);
@@ -51,18 +55,18 @@ export default function FightOverlay({
 
   // 針の自動回転
   useEffect(() => {
-    if (doneRef.current || judging) return;
+    if (doneRef.current || judging || paused) return;
     const interval = setInterval(() => {
       setNeedleAngle((prev) => (prev + speed * directionRef.current + 360) % 360);
     }, 16);
     return () => clearInterval(interval);
-  }, [speed, judging]);
+  }, [speed, judging, paused]);
 
   // タップ判定
   const handleTap = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
       e.stopPropagation();
-      if (doneRef.current || judging) return;
+      if (doneRef.current || judging || paused) return;
 
       setJudging(true);
 
@@ -115,7 +119,7 @@ export default function FightOverlay({
         }
       }
     },
-    [needleAngle, sweetSpotAngle, sweetSpotSize, hits, misses, requiredHits, judging, onSuccess, onFail]
+    [needleAngle, sweetSpotAngle, sweetSpotSize, hits, misses, requiredHits, judging, paused, onSuccess, onFail]
   );
 
   const ringRadius = 70;
