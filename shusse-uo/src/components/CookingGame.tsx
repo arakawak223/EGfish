@@ -15,7 +15,7 @@ interface CookingGameProps {
   paused?: boolean;
 }
 
-type PrepState = "idle" | "cutting" | "done";
+type PrepState = "idle" | "cutting" | "shaping" | "done";
 
 // 一閃さばき: 魚体に矢印の直線が1〜3本。始点から終点へ一気にスワイプして断つ。
 // 難度が上がると本数が増える（1本=頭落とし / 2本=二枚 / 3本=三枚おろし）。
@@ -30,12 +30,21 @@ interface Slash {
   speedScore: number; // 0~1 決断力（速いほど良い）
 }
 
+// 三手握り: シャリ玉の上にパルスリングが3つ順に現れ、ターゲット枠を通る瞬間にタップ
+interface NigiriBeat {
+  idealTime: number; // shaping開始からのms（ここでリングがターゲット半径を通過）
+  tapped: boolean;
+  score: number;     // 0~1 タイミング精度
+}
+
 interface PrepProgress {
   fishId: string;
   slashes: Slash[];
   currentSlash: number;
   state: PrepState;
-  avgAccuracy: number;
+  cutAccuracy: number;     // カットのみの品質（shaping開始時に確定）
+  nigiriScore?: number;    // 握りのみの品質（握り完了時に確定）
+  avgAccuracy: number;     // 最終品質（販売倍率に使用）
   perfect: boolean;
 }
 
@@ -50,6 +59,14 @@ interface ActiveCutState {
   accumulatedAccuracy: number;
   accumulatedSpeedScore: number;
   completedCount: number;
+}
+
+// 進行中の握り状態（ref管理）
+interface ActiveNigiriState {
+  fishId: string;
+  startTime: number;       // performance.now() 基準
+  beats: NigiriBeat[];
+  currentBeat: number;
 }
 
 // 限定メニュー: カウンターに出した寿司
@@ -69,6 +86,19 @@ const COUNTER_MAX_WAIT = 20;
 const AREA_W = 280;
 const AREA_H = 140;
 const MARGIN = 22;
+
+// 三手握り（リズムゲーム）パラメータ
+const NIGIRI_BEAT_COUNT = 3;
+const NIGIRI_LEAD_IN = 500;          // 最初の拍までの余裕ms（timeMultiplierでスケール）
+const NIGIRI_BEAT_INTERVAL = 820;    // 拍の間隔ms（timeMultiplierでスケール）
+const NIGIRI_RING_DURATION = 780;    // リングがOUTERからINNERへ縮む時間ms（timeMultiplierでスケール）
+const NIGIRI_OUTER_R = 46;           // 縮み始めの半径
+const NIGIRI_TARGET_R = 22;          // 理想タップ時の半径（=ターゲット枠の半径）
+const NIGIRI_INNER_R = 4;            // 縮み終わり
+const NIGIRI_PERFECT_WINDOW = 110;   // ±ms以内ならパーフェクト（timeMultiplierでスケール）
+const NIGIRI_FADE_WINDOW = 360;      // ±ms以上でスコア0（timeMultiplierでスケール）
+const NIGIRI_CENTER_X = AREA_W / 2;
+const NIGIRI_CENTER_Y = AREA_H / 2 + 4;
 
 // 魚ごとに一閃さばきのラインを生成。常に左→右の水平カット。
 // 本数は難度で決まる: 1本=頭落とし / 2本=二枚おろし / 3本=三枚おろし
@@ -99,20 +129,27 @@ function generateSlashes(difficulty: number): Slash[] {
 export default function CookingGame({ inventory, marketTrend, onSell, timeMultiplier = 1, paused = false }: CookingGameProps) {
   const [prepProgress, setPrepProgress] = useState<Record<string, PrepProgress>>({});
   const [freshness, setFreshness] = useState<Record<string, number>>({});
-  const [sellMode, setSellMode] = useState<string | null>(null);
   const [activeCut, setActiveCut] = useState<string | null>(null);
   const [drawPoints, setDrawPoints] = useState<{ x: number; y: number; t: number }[]>([]);
   const [counter, setCounter] = useState<CounterItem[]>([]);
   const [flash, setFlash] = useState<{ fishId: string; kind: "combo" | "perfect" | "bone"; at: number } | null>(null);
+  const [activeNigiri, setActiveNigiri] = useState<string | null>(null);
+  const [, setNigiriTick] = useState(0);
   const activeRectRef = useRef<DOMRect | null>(null);
   const activeCutRef = useRef<ActiveCutState | null>(null);
+  const activeNigiriRef = useRef<ActiveNigiriState | null>(null);
 
-  // 一時停止中にカット中だった場合はキャンセルしておく（指を離した扱い）
+  // 一時停止中にカット中 or 握り中だった場合はキャンセルしておく
   useEffect(() => {
-    if (paused && activeCutRef.current) {
+    if (!paused) return;
+    if (activeCutRef.current) {
       activeCutRef.current = null;
       setActiveCut(null);
       setDrawPoints([]);
+    }
+    if (activeNigiriRef.current) {
+      activeNigiriRef.current = null;
+      setActiveNigiri(null);
     }
   }, [paused]);
 
@@ -327,12 +364,12 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
             vibrate([12]);
           }
 
-          // 全スラッシュ完了
+          // 全スラッシュ完了 → 握り段階へ
           if (active.slashIndex >= active.totalSlashes) {
             const avgAcc = active.accumulatedAccuracy / active.totalSlashes;
             const avgSpeed = active.accumulatedSpeedScore / active.totalSlashes;
-            const perfect = avgAcc >= 0.85 && avgSpeed >= 0.85;
-            const combinedAcc = Math.min(1, avgAcc * (0.7 + 0.3 * avgSpeed) * (perfect ? 1.1 : 1));
+            const cutPerfect = avgAcc >= 0.85 && avgSpeed >= 0.85;
+            const cutAcc = Math.min(1, avgAcc * (0.7 + 0.3 * avgSpeed) * (cutPerfect ? 1.1 : 1));
 
             setPrepProgress((prevP) => ({
               ...prevP,
@@ -340,14 +377,15 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                 fishId: active.fishId,
                 slashes: active.slashesSnapshot.map((s) => ({ ...s })),
                 currentSlash: active.totalSlashes,
-                state: "done",
-                avgAccuracy: combinedAcc,
-                perfect,
+                state: "shaping",
+                cutAccuracy: cutAcc,
+                avgAccuracy: cutAcc, // 握り未了の間はカット値で仮置き
+                perfect: cutPerfect,
               },
             }));
-            vibrate([30, 10, 30, 10, 60]);
-            playSEPrepDone();
-            if (perfect) setFlash({ fishId: active.fishId, kind: "perfect", at: now });
+            vibrate([30, 10, 30]);
+            playSESlice();
+            if (cutPerfect) setFlash({ fishId: active.fishId, kind: "perfect", at: now });
             activeCutRef.current = null;
             setActiveCut(null);
             return [];
@@ -372,13 +410,16 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
       const avgAcc = active.accumulatedAccuracy / completed;
       const avgSpeed = active.accumulatedSpeedScore / completed;
       const combinedAcc = Math.min(1, avgAcc * (0.7 + 0.3 * avgSpeed));
+      const fullyDone = completed >= active.totalSlashes;
       setPrepProgress((prev) => ({
         ...prev,
         [active.fishId]: {
           fishId: active.fishId,
           slashes: active.slashesSnapshot.map((s) => ({ ...s })),
           currentSlash: completed,
-          state: completed >= active.totalSlashes ? "done" : "cutting",
+          // 一筆で全部終えずに指を離した場合も、カット自体は完遂していれば握り段階へ
+          state: fullyDone ? "shaping" : "cutting",
+          cutAccuracy: fullyDone ? combinedAcc : (prev[active.fishId]?.cutAccuracy ?? combinedAcc),
           avgAccuracy: combinedAcc,
           perfect: prev[active.fishId]?.perfect ?? false,
         },
@@ -390,6 +431,147 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
     setDrawPoints([]);
   }, []);
 
+  // ───── 三手握り（リズムゲーム）─────
+
+  // 握り完了: nigiriScore を確定して state を "done" に
+  const finalizeNigiri = useCallback(() => {
+    const active = activeNigiriRef.current;
+    if (!active) return;
+    const total = active.beats.reduce((s, b) => s + b.score, 0);
+    const nigiriScore = total / active.beats.length;
+
+    setPrepProgress((prev) => {
+      const p = prev[active.fishId];
+      if (!p) return prev;
+      // 最終品質: カット 60% + 握り 40%
+      const finalAcc = Math.min(1, p.cutAccuracy * 0.6 + nigiriScore * 0.4);
+      const perfectBoth = p.perfect && nigiriScore >= 0.85;
+      return {
+        ...prev,
+        [active.fishId]: {
+          ...p,
+          state: "done",
+          nigiriScore,
+          avgAccuracy: finalAcc,
+          perfect: perfectBoth,
+        },
+      };
+    });
+
+    const now = performance.now();
+    if (nigiriScore >= 0.85) {
+      vibrate([25, 10, 25, 10, 50]);
+      setFlash({ fishId: active.fishId, kind: "perfect", at: now });
+    } else {
+      vibrate([20, 10, 40]);
+    }
+    playSEPrepDone();
+    activeNigiriRef.current = null;
+    setActiveNigiri(null);
+  }, []);
+
+  // 握りrAFループ: 経過時間で過ぎた拍を自動ミス処理、全拍タップ済みなら finalize
+  useEffect(() => {
+    if (!activeNigiri || paused) return;
+    let raf = 0;
+    const loop = () => {
+      const active = activeNigiriRef.current;
+      if (!active) return;
+      const elapsed = performance.now() - active.startTime;
+      const autofailAfter = NIGIRI_FADE_WINDOW * timeMultiplier;
+      let advanced = false;
+      for (let i = 0; i < active.beats.length; i++) {
+        const beat = active.beats[i];
+        if (!beat.tapped && elapsed > beat.idealTime + autofailAfter) {
+          beat.tapped = true;
+          beat.score = 0;
+          if (i === active.currentBeat) {
+            active.currentBeat = Math.min(active.beats.length, active.currentBeat + 1);
+          }
+          advanced = true;
+        }
+      }
+      if (active.beats.every((b) => b.tapped)) {
+        finalizeNigiri();
+        return;
+      }
+      if (advanced) vibrate([8]);
+      setNigiriTick((t) => (t + 1) & 0xffff);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [activeNigiri, paused, timeMultiplier, finalizeNigiri]);
+
+  // 握り開始: タップで3拍シーケンスを走らせる
+  const startNigiri = useCallback((fish: CaughtFish) => {
+    const beats: NigiriBeat[] = [];
+    const leadIn = NIGIRI_LEAD_IN * timeMultiplier;
+    const interval = NIGIRI_BEAT_INTERVAL * timeMultiplier;
+    for (let i = 0; i < NIGIRI_BEAT_COUNT; i++) {
+      beats.push({
+        idealTime: leadIn + i * interval,
+        tapped: false,
+        score: 0,
+      });
+    }
+    activeNigiriRef.current = {
+      fishId: fish.id,
+      startTime: performance.now(),
+      beats,
+      currentBeat: 0,
+    };
+    setActiveNigiri(fish.id);
+    vibrate([6]);
+  }, [timeMultiplier]);
+
+  // 握りエリアのタップ
+  const handleNigiriTap = useCallback((fish: CaughtFish) => {
+    const active = activeNigiriRef.current;
+    // 未開始 or 別の魚 → このタップは開始トリガーとして消費
+    if (!active || active.fishId !== fish.id) {
+      startNigiri(fish);
+      return;
+    }
+    const now = performance.now();
+    const elapsed = now - active.startTime;
+
+    // 現在の拍を取る。既にタップ済みならスキップして次へ
+    let idx = active.currentBeat;
+    while (idx < active.beats.length && active.beats[idx].tapped) idx++;
+    if (idx >= active.beats.length) return;
+    const beat = active.beats[idx];
+
+    const deltaT = Math.abs(elapsed - beat.idealTime);
+    const perfectW = NIGIRI_PERFECT_WINDOW * timeMultiplier;
+    const fadeW = NIGIRI_FADE_WINDOW * timeMultiplier;
+    let score: number;
+    if (deltaT <= perfectW) score = 1;
+    else if (deltaT >= fadeW) score = 0;
+    else score = 1 - (deltaT - perfectW) / (fadeW - perfectW);
+
+    beat.tapped = true;
+    beat.score = score;
+    active.currentBeat = idx + 1;
+
+    playSESlice();
+    if (score >= 0.85) {
+      vibrate([15, 5, 25]);
+    } else if (score > 0) {
+      vibrate([10]);
+    } else {
+      vibrate([20]);
+      playSEMiss();
+    }
+
+    // 全拍タップ済みになったら即時finalize
+    if (active.beats.every((b) => b.tapped)) {
+      finalizeNigiri();
+    } else {
+      setNigiriTick((t) => (t + 1) & 0xffff);
+    }
+  }, [startNigiri, timeMultiplier, finalizeNigiri]);
+
   // 即売り
   const handleInstantSell = (fish: CaughtFish) => {
     const fishFreshness = freshness[fish.id] ?? 100;
@@ -400,7 +582,6 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
     const qualityMult = prep ? 0.7 + prep.avgAccuracy * 0.3 : 1; // 精度で0.7~1.0倍
     const price = Math.round(fish.sushiPrice * trendMult * freshMult * qualityMult);
     onSell(fish.id, price);
-    setSellMode(null);
     playSESell();
   };
 
@@ -424,7 +605,6 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
       ...prev,
       { fishId: fish.id, price: premiumPrice, placedAt: Date.now(), waitTime, customerArrived: false, expired: false },
     ]);
-    setSellMode(null);
   };
 
   const activeCounterCount = counter.filter((c) => !c.customerArrived && !c.expired).length;
@@ -510,6 +690,8 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
           const fishFreshness = freshness[fish.id] ?? 100;
           const prep = prepProgress[fish.id];
           const isDone = prep?.state === "done";
+          const isShaping = prep?.state === "shaping";
+          const cutPhase = !prep || prep.state === "idle" || prep.state === "cutting";
           const isRotten = fishFreshness <= 0;
           const isRare = fishData.reverseValue && fish.stageIndex === 0;
 
@@ -568,10 +750,10 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                 </div>
               </div>
 
-              {/* 捌きエリア or 販売 */}
+              {/* 捌き → 握り → 販売 */}
               {isRotten ? (
                 <div className="text-center text-gray-400 text-sm py-2">鮮度が落ちてしまいました...</div>
-              ) : !isDone ? (
+              ) : cutPhase ? (
                 /* ---- 精密カットエリア ---- */
                 <div
 
@@ -701,7 +883,16 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                     </div>
                   )}
                 </div>
-              ) : sellMode === fish.id ? (
+              ) : isShaping ? (
+                /* ---- 三手握りエリア ---- */
+                <NigiriArea
+                  fishId={fish.id}
+                  timeMultiplier={timeMultiplier}
+                  activeRef={activeNigiriRef}
+                  isActive={activeNigiri === fish.id}
+                  onTap={() => handleNigiriTap(fish)}
+                />
+              ) : isDone ? (
                 <div className="space-y-2">
                   <button
                     onClick={() => handleInstantSell(fish)}
@@ -728,19 +919,147 @@ export default function CookingGame({ inventory, marketTrend, onSell, timeMultip
                     </div>
                     <span className="text-lg">¥{premiumPrice.toLocaleString()}</span>
                   </button>
-                  <button onClick={() => setSellMode(null)} className="w-full text-gray-400 text-xs py-1">戻る</button>
                 </div>
-              ) : (
-                <button
-                  onClick={() => setSellMode(fish.id)}
-                  className="w-full bg-green-500 hover:bg-green-600 text-white py-3 rounded-lg font-bold transition-all active:scale-95"
-                >
-                  🍣 握って売る！
-                </button>
-              )}
+              ) : null}
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ───── 三手握りエリア ─────
+interface NigiriAreaProps {
+  fishId: string;
+  timeMultiplier: number;
+  activeRef: React.RefObject<ActiveNigiriState | null>;
+  isActive: boolean;
+  onTap: () => void;
+}
+
+function NigiriArea({ timeMultiplier, activeRef, isActive, onTap }: NigiriAreaProps) {
+  const active = isActive ? activeRef.current : null;
+  const elapsed = active ? performance.now() - active.startTime : 0;
+  const ringDuration = NIGIRI_RING_DURATION * timeMultiplier;
+
+  return (
+    <div
+      className="relative bg-gradient-to-b from-amber-50 to-yellow-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200 cursor-pointer"
+      style={{ height: 140 }}
+      onMouseDown={onTap}
+      onTouchStart={(e) => { e.preventDefault(); onTap(); }}
+    >
+      {/* まな板テクスチャ */}
+      <div className="absolute inset-0 opacity-20"
+        style={{
+          backgroundImage: "repeating-linear-gradient(90deg, transparent, transparent 35px, rgba(180,140,80,0.2) 35px, rgba(180,140,80,0.2) 36px)",
+        }}
+      />
+
+      <svg className="absolute inset-0 w-full h-full pointer-events-none">
+        {/* シャリ玉 */}
+        <ellipse
+          cx={NIGIRI_CENTER_X}
+          cy={NIGIRI_CENTER_Y}
+          rx={58}
+          ry={30}
+          fill="#fffbeb"
+          stroke="#fbbf24"
+          strokeWidth={2}
+          opacity={0.95}
+        />
+        {/* シャリの粒感 */}
+        {Array.from({ length: 10 }).map((_, i) => {
+          const angle = (i / 10) * Math.PI * 2;
+          const rx = 38 * Math.cos(angle);
+          const ry = 18 * Math.sin(angle);
+          return (
+            <circle
+              key={`grain${i}`}
+              cx={NIGIRI_CENTER_X + rx}
+              cy={NIGIRI_CENTER_Y + ry}
+              r={2.5}
+              fill="rgba(251,191,36,0.35)"
+            />
+          );
+        })}
+
+        {/* ターゲット枠 */}
+        <circle
+          cx={NIGIRI_CENTER_X}
+          cy={NIGIRI_CENTER_Y}
+          r={NIGIRI_TARGET_R}
+          fill="none"
+          stroke="rgba(234, 88, 12, 0.85)"
+          strokeWidth={2.5}
+          strokeDasharray="4,3"
+        />
+        <text
+          x={NIGIRI_CENTER_X}
+          y={NIGIRI_CENTER_Y + 3.5}
+          textAnchor="middle"
+          fontSize={9}
+          fontWeight="bold"
+          fill="rgba(154, 52, 18, 0.85)"
+        >
+          TAP
+        </text>
+
+        {/* 進行中のパルスリング */}
+        {active && active.beats.map((beat, i) => {
+          if (beat.tapped) return null;
+          const windowStart = beat.idealTime - ringDuration / 2;
+          const windowEnd = beat.idealTime + ringDuration / 2;
+          if (elapsed < windowStart || elapsed > windowEnd) return null;
+          const t = (elapsed - windowStart) / ringDuration;
+          const r = NIGIRI_OUTER_R + (NIGIRI_INNER_R - NIGIRI_OUTER_R) * t;
+          const nearTarget = Math.abs(r - NIGIRI_TARGET_R) < 6;
+          return (
+            <circle
+              key={`ring${i}`}
+              cx={NIGIRI_CENTER_X}
+              cy={NIGIRI_CENTER_Y}
+              r={r}
+              fill="none"
+              stroke={nearTarget ? "#2563eb" : "#60a5fa"}
+              strokeWidth={nearTarget ? 4 : 3}
+              opacity={0.9}
+            />
+          );
+        })}
+
+        {/* 進捗ドット */}
+        {active && active.beats.map((b, i) => {
+          const color = b.tapped
+            ? b.score > 0.8 ? "#22c55e" : b.score > 0.4 ? "#eab308" : "#ef4444"
+            : "#e5e7eb";
+          return (
+            <g key={`dot${i}`}>
+              <circle
+                cx={16 + i * 14}
+                cy={14}
+                r={5.5}
+                fill={color}
+                stroke="#6b7280"
+                strokeWidth={1}
+              />
+              {b.tapped && b.score > 0.8 && (
+                <text x={16 + i * 14} y={17.5} textAnchor="middle" fontSize={8} fontWeight="bold" fill="#fff">✓</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* ヒント */}
+      <div className="absolute bottom-1 left-0 right-0 text-center">
+        <span className="text-xs bg-black/40 text-white px-2 py-0.5 rounded-full">
+          {!active
+            ? "タップして握り始める"
+            : `三手握り（${Math.min(active.currentBeat + 1, active.beats.length)}/${active.beats.length}）リングがTAP枠に重なった瞬間！`
+          }
+        </span>
       </div>
     </div>
   );
