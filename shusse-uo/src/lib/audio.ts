@@ -252,6 +252,138 @@ export function playSESell() {
   osc.stop(t + 0.35);
 }
 
+// ─── 調理用SE ───
+
+// 包丁が身に入る「トクッ」
+export function playSEKnifeEntry() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  // 木を叩くような短いアタック
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(280, t);
+  osc.frequency.exponentialRampToValueAtTime(80, t + 0.06);
+  gain.gain.setValueAtTime(0.3, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.08);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.1);
+}
+
+// 骨に沿うスムーズな「スルスル」
+export function playSESmoothSlide() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  const bufferSize = ctx.sampleRate * 0.06;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * 0.08 * (1 - i / bufferSize);
+  }
+  const source = ctx.createBufferSource();
+  const filter = ctx.createBiquadFilter();
+  const gain = ctx.createGain();
+  source.buffer = buffer;
+  filter.type = "highpass";
+  filter.frequency.value = 4000;
+  gain.gain.setValueAtTime(0.08, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.06);
+  source.connect(filter).connect(gain).connect(ctx.destination);
+  source.start(t);
+}
+
+// 骨に引っかかる「ガリッ」
+export function playSEBoneResist() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(400, t);
+  osc.frequency.setValueAtTime(250, t + 0.03);
+  osc.frequency.setValueAtTime(450, t + 0.06);
+  gain.gain.setValueAtTime(0.15, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.1);
+}
+
+// シャリを掴む「サクッ」
+export function playSERiceGrab() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  const bufferSize = ctx.sampleRate * 0.08;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const env = i < bufferSize * 0.2 ? i / (bufferSize * 0.2) : 1 - (i - bufferSize * 0.2) / (bufferSize * 0.8);
+    data[i] = (Math.random() * 2 - 1) * env * 0.25;
+  }
+  const source = ctx.createBufferSource();
+  const filter = ctx.createBiquadFilter();
+  const gain = ctx.createGain();
+  source.buffer = buffer;
+  filter.type = "bandpass";
+  filter.frequency.value = 3000;
+  gain.gain.setValueAtTime(0.15, t);
+  source.connect(filter).connect(gain).connect(ctx.destination);
+  source.start(t);
+}
+
+// ネタを合わせる「ペタッ」
+export function playSENetaCombine() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(500, t);
+  osc.frequency.exponentialRampToValueAtTime(200, t + 0.05);
+  gain.gain.setValueAtTime(0.15, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.07);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.08);
+}
+
+// 握り完成の完璧な「フワッ」
+export function playSENigiriPerfect() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  // 柔らかいベル音 + エアリーなパッド
+  [523, 659, 784].forEach((freq, i) => { // C5, E5, G5
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    const start = t + i * 0.05;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.12, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, start + 0.3);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + 0.3);
+  });
+}
+
+// 握りの失敗「ブスッ」
+export function playSENigiriFail() {
+  const ctx = getAudioContext();
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(200, t);
+  osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+  gain.gain.setValueAtTime(0.12, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.2);
+}
+
 // 糸切れ: 「パンッ」
 export function playSESnap() {
   const ctx = getAudioContext();
