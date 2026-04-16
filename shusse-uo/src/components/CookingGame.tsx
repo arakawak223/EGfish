@@ -62,32 +62,27 @@ const AREA_W = 280;
 const AREA_H = 160;
 
 // ── 三枚おろしパラメータ ──
-const ENTRY_HOLD_MS = 600;         // 包丁を入れるのに必要な長押し時間
-const ENTRY_CIRCLE_X = 50;        // 頭の位置 X
+const ENTRY_HOLD_MS = 600;
+const ENTRY_CIRCLE_X = 55;
 const ENTRY_CIRCLE_Y = AREA_H / 2;
-const ENTRY_CIRCLE_R = 28;
+const ENTRY_CIRCLE_R = 32;        // ★ 拡大
 
-// 中骨ライン: 左端→右端、少し曲線
 const BONE_START_X = 40;
 const BONE_END_X = AREA_W - 30;
 const BONE_Y = AREA_H / 2 - 5;
-// 速度判定 (px/sec)
-const SLIDE_IDEAL_MIN = 60;
-const SLIDE_IDEAL_MAX = 180;
-const SLIDE_TOO_FAST = 260;
+const SLIDE_IDEAL_MIN = 40;       // ★ 緩和
+const SLIDE_IDEAL_MAX = 220;      // ★ 緩和
+const SLIDE_TOO_FAST = 320;       // ★ 緩和
 
-// 腹骨の弧
-const BELLY_ARC_POINTS = 20; // 弧を構成する点の数
+const BELLY_ARC_POINTS = 20;
 
 // ── 握りパラメータ ──
-const RICE_MAX_HOLD_MS = 1800;    // シャリの最大長押し時間
-const PINCH_INITIAL_DIST = 100;   // ピンチ開始時の理想指間距離(px)
-const PINCH_COMPLETE_DIST = 25;   // ピンチ完了判定距離(px)
-const PRESS_MAX_MS = 2200;        // 圧力ゲージが満タンになる時間
+const RICE_MAX_HOLD_MS = 1800;
+const PINCH_INITIAL_DIST = 100;
+const PINCH_COMPLETE_DIST = 25;
+const PRESS_MAX_MS = 2200;
 
-// 魚サイズごとの理想値
 function getIdealRiceRatio(size: "small" | "medium" | "large"): number {
-  // 0-1 の範囲での理想リリースタイミング
   switch (size) {
     case "small": return 0.28;
     case "medium": return 0.50;
@@ -96,23 +91,19 @@ function getIdealRiceRatio(size: "small" | "medium" | "large"): number {
 }
 
 function getIdealPressRange(size: "small" | "medium" | "large"): [number, number] {
-  // 圧力ゲージ(0-1)の理想範囲
   switch (size) {
-    case "small": return [0.20, 0.42];   // 繊細
-    case "medium": return [0.35, 0.60];
-    case "large": return [0.48, 0.72];   // しっかり
+    case "small": return [0.18, 0.45];
+    case "medium": return [0.30, 0.62];
+    case "large": return [0.42, 0.75];
   }
 }
 
-// 腹骨の弧パスを生成
 function generateBellyArc(difficulty: number): { x: number; y: number }[] {
   const points: { x: number; y: number }[] = [];
-  // 弧の開始・終了位置（難度で変動）
   const startX = AREA_W * 0.65;
   const startY = AREA_H * 0.32;
   const endX = AREA_W * 0.25;
   const endY = AREA_H * 0.78;
-  // ベジェ制御点
   const cpX = AREA_W * (0.25 + difficulty * 0.15);
   const cpY = AREA_H * 0.25;
 
@@ -126,7 +117,6 @@ function generateBellyArc(difficulty: number): { x: number; y: number }[] {
   return points;
 }
 
-// 弧への平均距離でスコア算出
 function scoreArcFollowing(
   drawn: { x: number; y: number }[],
   arc: { x: number; y: number }[],
@@ -142,18 +132,14 @@ function scoreArcFollowing(
     totalDist += minDist;
   }
   const avgDist = totalDist / drawn.length;
-  // avgDist 0 = perfect, 30+ = 0 score
-  return Math.max(0, Math.min(1, 1 - avgDist / 30));
+  return Math.max(0, Math.min(1, 1 - avgDist / 35));
 }
 
-// ピンチスコア: 指間距離の減少のスムーズさ
 function scorePinch(samples: number[]): number {
   if (samples.length < 3) return 0;
   const start = samples[0];
   const end = samples[samples.length - 1];
-  // 十分に閉じたか
   const closedRatio = Math.max(0, Math.min(1, (start - end) / (start * 0.6)));
-  // 滑らかさ: 距離が単調減少に近いか
   let monotone = 0;
   for (let i = 1; i < samples.length; i++) {
     if (samples[i] <= samples[i - 1] + 5) monotone++;
@@ -162,40 +148,96 @@ function scorePinch(samples: number[]): number {
   return closedRatio * 0.6 + smoothness * 0.4;
 }
 
+// ── チュートリアルガイド ──
+const TUTORIAL_STEPS = [
+  { icon: "🔪", title: "1. 包丁を入れる", desc: "頭の付け根の円を長押し" },
+  { icon: "🦴", title: "2. 中骨に沿う",   desc: "骨ラインをゆっくり右へスワイプ" },
+  { icon: "🔻", title: "3. 腹骨をすく",   desc: "弧のガイドに沿ってスワイプ" },
+  { icon: "🍚", title: "4. シャリを取る", desc: "長押し → 緑ゾーンで離す" },
+  { icon: "🤏", title: "5. ネタと合わせ", desc: "二本指ピンチ（PCはクリック）" },
+  { icon: "🤲", title: "6. 本手返し",     desc: "長押し → 緑ゾーンで離す" },
+];
+
+function TutorialGuide({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-4 mb-3">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-bold text-blue-800">調理ガイド — 6つの工程で握りを完成させよう！</span>
+        <button
+          onClick={onClose}
+          className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full font-bold active:scale-95"
+        >
+          閉じる
+        </button>
+      </div>
+
+      {/* 三枚おろし */}
+      <div className="mb-2">
+        <span className="text-xs font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded">三枚おろし</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        {TUTORIAL_STEPS.slice(0, 3).map((step, i) => (
+          <div key={i} className="bg-white rounded-lg p-2 text-center border border-orange-200">
+            <div className="text-2xl mb-1">{step.icon}</div>
+            <div className="text-[10px] font-bold text-gray-700">{step.title}</div>
+            <div className="text-[9px] text-gray-500 mt-0.5">{step.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 握り */}
+      <div className="mb-2">
+        <span className="text-xs font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded">握り</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        {TUTORIAL_STEPS.slice(3).map((step, i) => (
+          <div key={i} className="bg-white rounded-lg p-2 text-center border border-green-200">
+            <div className="text-2xl mb-1">{step.icon}</div>
+            <div className="text-[10px] font-bold text-gray-700">{step.title}</div>
+            <div className="text-[9px] text-gray-500 mt-0.5">{step.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="text-center">
+        <div className="text-[10px] text-blue-600 bg-blue-100 rounded-full px-3 py-1 inline-block">
+          速すぎるスワイプ = 身を削る！ゆっくり丁寧に操作しましょう
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════
+// メインコンポーネント
+// ════════════════════════════════════════════
+
 export default function CookingGame({
   inventory, marketTrend, onSell, timeMultiplier = 1, paused = false,
 }: CookingGameProps) {
   const [prepProgress, setPrepProgress] = useState<Record<string, PrepProgress>>({});
   const [freshness, setFreshness] = useState<Record<string, number>>({});
   const [counter, setCounter] = useState<CounterItem[]>([]);
-  const [flash, setFlash] = useState<{ fishId: string; kind: string; at: number } | null>(null);
-  // リアルタイム描画用
+  const [showTutorial, setShowTutorial] = useState(true);
   const [, setTick] = useState(0);
   const forceTick = useCallback(() => setTick((t) => (t + 1) & 0xffff), []);
 
-  // アクティブ状態（ref管理 → パフォーマンスのためstateにしない）
   const activePhaseRef = useRef<{
     fishId: string;
     phase: PrepState;
     startTime: number;
-    // cut-entry
     holdProgress?: number;
     holdInCircle?: boolean;
-    // cut-slide
     slidePoints?: { x: number; y: number; t: number }[];
     slideVelocities?: number[];
     slideLastVibTime?: number;
     slideSpeedZone?: "slow" | "ideal" | "fast";
-    // cut-belly
     bellyArc?: { x: number; y: number }[];
     bellyPoints?: { x: number; y: number }[];
-    // nigiri-rice
     riceRatio?: number;
-    // nigiri-pinch
     pinchSamples?: number[];
     pinchStartDist?: number;
     pinchComplete?: boolean;
-    // nigiri-press
     pressRatio?: number;
   } | null>(null);
   const activeRectRef = useRef<DOMRect | null>(null);
@@ -271,7 +313,7 @@ export default function CookingGame({
     return () => clearInterval(interval);
   }, [onSell, paused]);
 
-  // ── アニメーションループ（長押し系のプログレス更新）──
+  // ── アニメーションループ ──
   useEffect(() => {
     if (paused) return;
     let raf = 0;
@@ -284,11 +326,9 @@ export default function CookingGame({
         if (active.phase === "cut-entry") {
           active.holdProgress = Math.min(1, elapsed / (ENTRY_HOLD_MS * timeMultiplier));
           if (active.holdProgress >= 1) {
-            // 包丁が入った！
             vibrate(HAPTIC_PATTERNS.knifeEntry);
             playSEKnifeEntry();
             const fishId = active.fishId;
-            // エントリースコア: ホールド中にサークル内に留まったか
             const entryScore = active.holdInCircle ? 1.0 : 0.6;
             activePhaseRef.current = null;
             setPrepProgress((prev) => ({
@@ -299,7 +339,6 @@ export default function CookingGame({
                 entryScore,
               },
             }));
-            setFlash({ fishId, kind: "entry", at: now });
           }
           forceTick();
         }
@@ -311,7 +350,6 @@ export default function CookingGame({
 
         if (active.phase === "nigiri-press") {
           active.pressRatio = Math.min(1, elapsed / (PRESS_MAX_MS * timeMultiplier));
-          // 満タンになったら自動リリース（強すぎ）
           if (active.pressRatio >= 1) {
             finishPress(active.fishId, 1.0);
           }
@@ -336,23 +374,30 @@ export default function CookingGame({
     };
   }
 
+  // ★ 修正: タッチイベントからクライアント座標を取得（touchend対応）
   const getClientPos = (e: React.MouseEvent | React.TouchEvent) => {
-    if ("touches" in e && e.touches.length > 0) {
-      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    if ("touches" in e) {
+      if (e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      if ("changedTouches" in e && (e as React.TouchEvent).changedTouches.length > 0) {
+        return { x: (e as React.TouchEvent).changedTouches[0].clientX, y: (e as React.TouchEvent).changedTouches[0].clientY };
+      }
+      return null;
     }
     if ("clientX" in e) return { x: (e as React.MouseEvent).clientX, y: (e as React.MouseEvent).clientY };
     return null;
   };
 
+  // ★ 修正: preserveAspectRatio="none" と合わせた正確な座標変換
   const toRelative = (clientX: number, clientY: number) => {
     const rect = activeRectRef.current;
     if (!rect) return null;
-    const scaleX = AREA_W / rect.width;
-    const scaleY = AREA_H / rect.height;
-    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+    return {
+      x: ((clientX - rect.left) / rect.width) * AREA_W,
+      y: ((clientY - rect.top) / rect.height) * AREA_H,
+    };
   };
 
-  // ── フェーズ開始 ──
+  // ── 1. 包丁を入れる ──
 
   const startCutEntry = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
     if (activePhaseRef.current) return;
@@ -363,9 +408,8 @@ export default function CookingGame({
     const pos = toRelative(client.x, client.y);
     if (!pos) return;
 
-    // 頭の円内でのみ反応
-    const dist = Math.hypot(pos.x - ENTRY_CIRCLE_X, pos.y - ENTRY_CIRCLE_Y);
-    if (dist > ENTRY_CIRCLE_R + 10) return;
+    // ★ ヒットゾーン大幅拡大: エリア左半分ならどこでもOK
+    if (pos.x > AREA_W * 0.5) return;
 
     activePhaseRef.current = {
       fishId: fish.id,
@@ -385,8 +429,9 @@ export default function CookingGame({
     if (!client) return;
     const pos = toRelative(client.x, client.y);
     if (!pos) return;
+    // エリア内にいればOK（指がずれても許容）
     const dist = Math.hypot(pos.x - ENTRY_CIRCLE_X, pos.y - ENTRY_CIRCLE_Y);
-    if (dist > ENTRY_CIRCLE_R + 15) {
+    if (dist > ENTRY_CIRCLE_R * 3) {
       active.holdInCircle = false;
     }
   }, []);
@@ -394,12 +439,11 @@ export default function CookingGame({
   const handleEntryEnd = useCallback(() => {
     const active = activePhaseRef.current;
     if (!active || active.phase !== "cut-entry") return;
-    // 途中で離した → キャンセル
     activePhaseRef.current = null;
     forceTick();
   }, [forceTick]);
 
-  // ── 中骨スライド ──
+  // ── 2. 中骨スライド ──
 
   const startSlide = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
     if (activePhaseRef.current) return;
@@ -410,8 +454,8 @@ export default function CookingGame({
     const pos = toRelative(client.x, client.y);
     if (!pos) return;
 
-    // 左端付近でのみ開始
-    if (pos.x > BONE_START_X + 30 || Math.abs(pos.y - BONE_Y) > 30) return;
+    // ★ 開始判定を大幅緩和: 左1/3ならどこでも開始可能
+    if (pos.x > AREA_W * 0.4) return;
 
     activePhaseRef.current = {
       fishId: fish.id,
@@ -436,21 +480,18 @@ export default function CookingGame({
     const now = performance.now();
 
     const prev = active.slidePoints[active.slidePoints.length - 1];
-    const dx = pos.x - prev.x;
-    const dy = pos.y - prev.y;
-    const dt = (now - prev.t) / 1000; // sec
-    if (dt < 0.01) return; // 短すぎるサンプルは無視
+    const dt = (now - prev.t) / 1000;
+    if (dt < 0.01) return;
 
-    const dist = Math.hypot(dx, dy);
-    const velocity = dist / dt; // px/sec
+    const dist = Math.hypot(pos.x - prev.x, pos.y - prev.y);
+    const velocity = dist / dt;
 
     active.slidePoints.push({ ...pos, t: now });
     active.slideVelocities!.push(velocity);
 
-    // 速度ゾーン判定 & ハプティクス
     const adjustedMax = SLIDE_IDEAL_MAX * (1 + (1 - timeMultiplier) * 0.3);
     const adjustedFast = SLIDE_TOO_FAST * (1 + (1 - timeMultiplier) * 0.3);
-    const vibInterval = 120; // ハプティクス最小間隔ms
+    const vibInterval = 120;
 
     if (velocity > adjustedFast) {
       active.slideSpeedZone = "fast";
@@ -470,10 +511,9 @@ export default function CookingGame({
       active.slideSpeedZone = "slow";
     }
 
-    // 右端に到達 → 完了
-    if (pos.x >= BONE_END_X - 15) {
+    // ★ 完了判定を緩和: 右2/3まで来たらOK
+    if (pos.x >= AREA_W * 0.7) {
       const velocities = active.slideVelocities!;
-      // 適正速度帯にいた割合
       let idealCount = 0;
       let fastCount = 0;
       for (const v of velocities) {
@@ -482,14 +522,13 @@ export default function CookingGame({
       }
       const idealRatio = velocities.length > 0 ? idealCount / velocities.length : 0;
       const fastPenalty = velocities.length > 0 ? fastCount / velocities.length : 0;
-      // 骨線からの距離精度
       const pts = active.slidePoints!;
       let totalDeviation = 0;
       for (const p of pts) {
         totalDeviation += Math.abs(p.y - BONE_Y);
       }
       const avgDeviation = totalDeviation / pts.length;
-      const pathAcc = Math.max(0, Math.min(1, 1 - avgDeviation / 25));
+      const pathAcc = Math.max(0, Math.min(1, 1 - avgDeviation / 35));
 
       const slideScore = Math.max(0, Math.min(1,
         idealRatio * 0.5 + pathAcc * 0.35 - fastPenalty * 0.3 + 0.15
@@ -502,14 +541,8 @@ export default function CookingGame({
 
       setPrepProgress((prev) => {
         const p = prev[fishId] ?? makeInitialPrep(fishId);
-        return {
-          ...prev,
-          [fishId]: { ...p, state: "cut-belly", slideScore },
-        };
+        return { ...prev, [fishId]: { ...p, state: "cut-belly", slideScore } };
       });
-      if (slideScore >= 0.8) {
-        setFlash({ fishId, kind: "combo", at: now });
-      }
     }
 
     forceTick();
@@ -518,9 +551,11 @@ export default function CookingGame({
   const handleSlideEnd = useCallback(() => {
     const active = activePhaseRef.current;
     if (!active || active.phase !== "cut-slide") return;
-    // 途中で離した → 低スコアで完了
+    // 途中で離した → 進行度に応じたスコア
+    const pts = active.slidePoints ?? [];
+    const progress = pts.length > 0 ? Math.min(1, (pts[pts.length - 1].x - BONE_START_X) / (BONE_END_X - BONE_START_X)) : 0;
+    const slideScore = Math.max(0.1, progress * 0.5);
     const fishId = active.fishId;
-    const slideScore = 0.2;
     activePhaseRef.current = null;
     setPrepProgress((prev) => {
       const p = prev[fishId] ?? makeInitialPrep(fishId);
@@ -529,7 +564,7 @@ export default function CookingGame({
     forceTick();
   }, [forceTick]);
 
-  // ── 腹骨すく ──
+  // ── 3. 腹骨すく ──
 
   const startBelly = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
     if (activePhaseRef.current) return;
@@ -544,9 +579,9 @@ export default function CookingGame({
     const stage = fishData.stages[fish.stageIndex];
     const arc = generateBellyArc(stage.prepDifficulty);
 
-    // 弧の開始点付近でのみ反応
+    // ★ 開始判定を大幅緩和: 弧の始点から50px以内
     const distToStart = Math.hypot(pos.x - arc[0].x, pos.y - arc[0].y);
-    if (distToStart > 35) return;
+    if (distToStart > 55) return;
 
     activePhaseRef.current = {
       fishId: fish.id,
@@ -569,11 +604,11 @@ export default function CookingGame({
 
     active.bellyPoints!.push({ x: pos.x, y: pos.y });
 
-    // 弧の終点付近に到達 → 完了
     const arcEnd = active.bellyArc[active.bellyArc.length - 1];
     const distToEnd = Math.hypot(pos.x - arcEnd.x, pos.y - arcEnd.y);
 
-    if (distToEnd < 30 && active.bellyPoints!.length >= 5) {
+    // ★ 完了判定を緩和
+    if (distToEnd < 45 && active.bellyPoints!.length >= 4) {
       const bellyScore = scoreArcFollowing(active.bellyPoints!, active.bellyArc);
       const fishId = active.fishId;
       playSESlice();
@@ -585,7 +620,6 @@ export default function CookingGame({
         const cutAcc = Math.min(1,
           p.entryScore * 0.25 + p.slideScore * 0.45 + bellyScore * 0.30
         );
-        const cutPerfect = cutAcc >= 0.8;
         return {
           ...prev,
           [fishId]: {
@@ -594,14 +628,11 @@ export default function CookingGame({
             bellyScore,
             cutAccuracy: cutAcc,
             avgAccuracy: cutAcc,
-            perfect: cutPerfect,
+            perfect: cutAcc >= 0.8,
           },
         };
       });
       playSEPrepDone();
-      if (bellyScore >= 0.8) {
-        setFlash({ fishId, kind: "perfect", at: performance.now() });
-      }
     }
     forceTick();
   }, [forceTick]);
@@ -609,11 +640,10 @@ export default function CookingGame({
   const handleBellyEnd = useCallback(() => {
     const active = activePhaseRef.current;
     if (!active || active.phase !== "cut-belly") return;
-    // 途中離し → 低スコア
     const fishId = active.fishId;
     const bellyScore = active.bellyPoints && active.bellyArc
-      ? scoreArcFollowing(active.bellyPoints, active.bellyArc) * 0.5
-      : 0.1;
+      ? Math.max(0.2, scoreArcFollowing(active.bellyPoints, active.bellyArc) * 0.6)
+      : 0.15;
     activePhaseRef.current = null;
 
     setPrepProgress((prev) => {
@@ -635,7 +665,7 @@ export default function CookingGame({
     forceTick();
   }, [forceTick]);
 
-  // ── シャリを取る（長押し） ──
+  // ── 4. シャリを取る ──
 
   const startRice = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
     if (activePhaseRef.current) return;
@@ -659,9 +689,8 @@ export default function CookingGame({
     const stage = fishData.stages[fish.stageIndex];
     const idealRatio = getIdealRiceRatio(stage.size);
 
-    // 理想値との差でスコア
     const diff = Math.abs(ratio - idealRatio);
-    const riceScore = Math.max(0, Math.min(1, 1 - diff / 0.3));
+    const riceScore = Math.max(0, Math.min(1, 1 - diff / 0.35));
 
     playSERiceGrab();
     vibrate(HAPTIC_PATTERNS.riceGrab);
@@ -671,13 +700,10 @@ export default function CookingGame({
       const p = prev[fish.id] ?? makeInitialPrep(fish.id);
       return { ...prev, [fish.id]: { ...p, state: "nigiri-pinch", riceScore } };
     });
-    if (riceScore >= 0.85) {
-      setFlash({ fishId: fish.id, kind: "combo", at: performance.now() });
-    }
     forceTick();
   }, [forceTick]);
 
-  // ── ネタと合わせる（ピンチ） ──
+  // ── 5. ネタと合わせる（ピンチ / クリック） ──
 
   const handlePinchStart = useCallback((fish: CaughtFish, e: React.TouchEvent) => {
     if (activePhaseRef.current?.phase === "nigiri-pinch" && activePhaseRef.current.fishId === fish.id) return;
@@ -721,33 +747,16 @@ export default function CookingGame({
     const active = activePhaseRef.current;
     if (!active || active.phase !== "nigiri-pinch") return;
     if (active.pinchComplete) return;
-    // 途中離し → スコア判定
     const pinchScore = active.pinchSamples && active.pinchSamples.length > 2
       ? scorePinch(active.pinchSamples) * 0.7
       : 0.3;
     finishPinch(fish.id, pinchScore);
   }, []);
 
-  // デスクトップ用ピンチ代替: ドラッグで合わせる
-  const handlePinchMouseDown = useCallback((fish: CaughtFish) => {
+  // PC用: クリックで合わせ完了
+  const handlePinchClick = useCallback((fish: CaughtFish) => {
     if (activePhaseRef.current?.phase === "nigiri-pinch") return;
-    activePhaseRef.current = {
-      fishId: fish.id,
-      phase: "nigiri-pinch",
-      startTime: performance.now(),
-      pinchSamples: [PINCH_INITIAL_DIST],
-      pinchStartDist: PINCH_INITIAL_DIST,
-      pinchComplete: false,
-    };
-    vibrate([6]);
-    forceTick();
-  }, [forceTick]);
-
-  const handlePinchMouseUp = useCallback((fish: CaughtFish) => {
-    const active = activePhaseRef.current;
-    if (!active || active.phase !== "nigiri-pinch") return;
-    // デスクトップではクリック＝合わせ完了
-    const pinchScore = 0.75; // デスクトップでは固定中程度スコア
+    const pinchScore = 0.75;
     finishPinch(fish.id, pinchScore);
   }, []);
 
@@ -760,13 +769,10 @@ export default function CookingGame({
       const p = prev[fishId] ?? makeInitialPrep(fishId);
       return { ...prev, [fishId]: { ...p, state: "nigiri-press", pinchScore } };
     });
-    if (pinchScore >= 0.85) {
-      setFlash({ fishId, kind: "combo", at: performance.now() });
-    }
     forceTick();
   }
 
-  // ── 本手返し（圧力） ──
+  // ── 6. 本手返し ──
 
   const startPress = useCallback((fish: CaughtFish, e: React.MouseEvent | React.TouchEvent) => {
     if (activePhaseRef.current) return;
@@ -794,14 +800,12 @@ export default function CookingGame({
 
       let pressScore: number;
       if (ratio >= lo && ratio <= hi) {
-        // 理想範囲内 → 完璧
         const center = (lo + hi) / 2;
         const halfRange = (hi - lo) / 2;
         pressScore = 1 - Math.abs(ratio - center) / halfRange * 0.15;
       } else {
-        // 範囲外 → 距離に応じて減点
         const distToRange = ratio < lo ? lo - ratio : ratio - hi;
-        pressScore = Math.max(0, 1 - distToRange / 0.35);
+        pressScore = Math.max(0, 1 - distToRange / 0.4);
       }
       pressScore = Math.max(0, Math.min(1, pressScore));
 
@@ -811,7 +815,6 @@ export default function CookingGame({
       const finalAcc = Math.min(1, p.cutAccuracy * 0.55 + nigiriAcc * 0.45);
       const perfectAll = finalAcc >= 0.82;
 
-      // フィードバック
       if (pressScore >= 0.85) {
         vibrate(HAPTIC_PATTERNS.pressPerfect);
         playSENigiriPerfect();
@@ -821,10 +824,6 @@ export default function CookingGame({
       } else {
         vibrate(HAPTIC_PATTERNS.pressHard);
         playSENigiriFail();
-      }
-
-      if (perfectAll) {
-        setFlash({ fishId, kind: "perfect", at: performance.now() });
       }
       playSEPrepDone();
 
@@ -894,20 +893,8 @@ export default function CookingGame({
     return { text: "雑", color: "text-red-400", icon: "✕" };
   };
 
-  // フェーズヒントテキスト
-  const phaseHint = (state: PrepState) => {
-    switch (state) {
-      case "cut-entry": return "頭の付け根を長押しして包丁を入れる";
-      case "cut-slide": return "中骨に沿ってゆっくり右へ滑らせる";
-      case "cut-belly": return "腹骨の弧に沿って丁寧にすく";
-      case "nigiri-rice": return "長押しでシャリを取る（魚に合うサイズで離す）";
-      case "nigiri-pinch": return "二本指で挟んでネタとシャリを合わせる";
-      case "nigiri-press": return "押さえて離す — 空気を含ませる絶妙な圧で";
-      default: return "";
-    }
-  };
-
-  // ── 表示 ──
+  const stepLabels = ["切入","骨沿","腹骨","シャリ","合わせ","握り"];
+  const stepOrder: PrepState[] = ["cut-entry","cut-slide","cut-belly","nigiri-rice","nigiri-pinch","nigiri-press"];
 
   if (inventory.length === 0 && activeCounterCount === 0) {
     return (
@@ -923,6 +910,9 @@ export default function CookingGame({
 
   return (
     <div className="h-full bg-gradient-to-b from-amber-50 to-orange-100 overflow-y-auto p-3">
+      {/* チュートリアルガイド */}
+      {showTutorial && <TutorialGuide onClose={() => setShowTutorial(false)} />}
+
       {/* カウンター席 */}
       {activeCounterCount > 0 && (
         <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 mb-3">
@@ -972,6 +962,18 @@ export default function CookingGame({
         </div>
       )}
 
+      {/* ガイド再表示ボタン */}
+      {!showTutorial && (
+        <div className="mb-2 text-right">
+          <button
+            onClick={() => setShowTutorial(true)}
+            className="text-[10px] text-blue-500 underline"
+          >
+            操作ガイドを表示
+          </button>
+        </div>
+      )}
+
       <div className="space-y-3">
         {inventory
           .filter((fish) => !counter.some((c) => c.fishId === fish.id && !c.customerArrived && !c.expired))
@@ -992,7 +994,6 @@ export default function CookingGame({
           const instantPrice = Math.round(fish.sushiPrice * trendMult * freshMult * qualityMult);
           const premiumPrice = Math.round(fish.sushiPrice * trendMult * freshMult * 2.0 * qualityMultPremium);
 
-          // アクティブフェーズの状態
           const active = activePhaseRef.current;
           const isActiveForThis = active?.fishId === fish.id;
 
@@ -1043,12 +1044,9 @@ export default function CookingGame({
               {/* ステップインジケーター */}
               {!isRotten && !isDone && (
                 <div className="flex items-center gap-1 mb-2">
-                  {(["cut-entry","cut-slide","cut-belly","nigiri-rice","nigiri-pinch","nigiri-press"] as PrepState[]).map((step, i) => {
-                    const stepLabels = ["切入","骨沿","腹骨","シャリ","合わせ","握り"];
-                    const stepOrder = ["cut-entry","cut-slide","cut-belly","nigiri-rice","nigiri-pinch","nigiri-press"];
+                  {stepOrder.map((step, i) => {
                     const currentIdx = stepOrder.indexOf(currentState);
-                    const thisIdx = i;
-                    const done = thisIdx < currentIdx;
+                    const done = i < currentIdx;
                     const isCurrent = step === currentState;
                     return (
                       <div key={step} className="flex items-center">
@@ -1069,9 +1067,7 @@ export default function CookingGame({
               {isRotten ? (
                 <div className="text-center text-gray-400 text-sm py-2">鮮度が落ちてしまいました...</div>
               ) : (currentState === "idle" || currentState === "cut-entry") ? (
-                /* ── 包丁を入れる（長押し）── */
                 <CutEntryArea
-                  fish={fish}
                   stage={stage}
                   isActive={isActiveForThis && active?.phase === "cut-entry"}
                   holdProgress={isActiveForThis ? active?.holdProgress ?? 0 : 0}
@@ -1080,9 +1076,7 @@ export default function CookingGame({
                   onEnd={handleEntryEnd}
                 />
               ) : currentState === "cut-slide" ? (
-                /* ── 中骨スライド ── */
                 <CutSlideArea
-                  fish={fish}
                   isActive={isActiveForThis && active?.phase === "cut-slide"}
                   slidePoints={isActiveForThis ? active?.slidePoints : undefined}
                   speedZone={isActiveForThis ? active?.slideSpeedZone : undefined}
@@ -1091,7 +1085,6 @@ export default function CookingGame({
                   onEnd={handleSlideEnd}
                 />
               ) : currentState === "cut-belly" && (!prep || prep.state === "cut-belly") ? (
-                /* ── 腹骨すく ── */
                 <CutBellyArea
                   fish={fish}
                   isActive={isActiveForThis && active?.phase === "cut-belly"}
@@ -1102,7 +1095,6 @@ export default function CookingGame({
                   onEnd={handleBellyEnd}
                 />
               ) : currentState === "nigiri-rice" ? (
-                /* ── シャリを取る ── */
                 <NigiriRiceArea
                   fish={fish}
                   riceRatio={isActiveForThis ? active?.riceRatio ?? 0 : 0}
@@ -1111,20 +1103,16 @@ export default function CookingGame({
                   onEnd={() => handleRiceEnd(fish)}
                 />
               ) : currentState === "nigiri-pinch" ? (
-                /* ── ピンチ ── */
                 <NigiriPinchArea
-                  fish={fish}
                   isActive={isActiveForThis && active?.phase === "nigiri-pinch"}
                   pinchSamples={isActiveForThis ? active?.pinchSamples : undefined}
                   pinchStartDist={isActiveForThis ? active?.pinchStartDist : undefined}
                   onTouchStart={(e) => handlePinchStart(fish, e)}
                   onTouchMove={handlePinchMove}
                   onTouchEnd={() => handlePinchEnd(fish)}
-                  onMouseDown={() => handlePinchMouseDown(fish)}
-                  onMouseUp={() => handlePinchMouseUp(fish)}
+                  onClick={() => handlePinchClick(fish)}
                 />
               ) : currentState === "nigiri-press" ? (
-                /* ── 本手返し ── */
                 <NigiriPressArea
                   fish={fish}
                   pressRatio={isActiveForThis ? active?.pressRatio ?? 0 : 0}
@@ -1161,13 +1149,6 @@ export default function CookingGame({
                   </button>
                 </div>
               ) : null}
-
-              {/* フェーズヒント */}
-              {!isRotten && !isDone && currentState !== "idle" && (
-                <div className="mt-1 text-center">
-                  <span className="text-xs text-gray-500">{phaseHint(currentState)}</span>
-                </div>
-              )}
             </div>
           );
         })}
@@ -1177,12 +1158,19 @@ export default function CookingGame({
 }
 
 // ════════════════════════════════════════════
-// サブコンポーネント
+// サブコンポーネント — 全SVGに preserveAspectRatio="none" を追加
 // ════════════════════════════════════════════
 
-// ── 包丁を入れる ──
+const SVG_PROPS = {
+  className: "absolute inset-0 w-full h-full pointer-events-none",
+  viewBox: `0 0 ${AREA_W} ${AREA_H}`,
+  preserveAspectRatio: "none",
+} as const;
+
+const BOARD_BG = "repeating-linear-gradient(90deg, transparent, transparent 35px, rgba(180,140,80,0.2) 35px, rgba(180,140,80,0.2) 36px)";
+
+// ── 1. 包丁を入れる ──
 interface CutEntryAreaProps {
-  fish: CaughtFish;
   stage: { silhouetteScale: number };
   isActive: boolean;
   holdProgress: number;
@@ -1192,9 +1180,11 @@ interface CutEntryAreaProps {
 }
 
 function CutEntryArea({ stage, isActive, holdProgress, onStart, onMove, onEnd }: CutEntryAreaProps) {
+  const circumference = Math.PI * 2 * ENTRY_CIRCLE_R;
+
   return (
     <div
-      className="relative bg-gradient-to-b from-amber-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200"
+      className="relative bg-gradient-to-b from-amber-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border-2 border-amber-300"
       style={{ height: AREA_H }}
       onMouseDown={onStart}
       onMouseMove={onMove}
@@ -1204,46 +1194,46 @@ function CutEntryArea({ stage, isActive, holdProgress, onStart, onMove, onEnd }:
       onTouchMove={onMove}
       onTouchEnd={onEnd}
     >
-      {/* まな板テクスチャ */}
-      <div className="absolute inset-0 opacity-30"
-        style={{
-          backgroundImage: "repeating-linear-gradient(90deg, transparent, transparent 35px, rgba(180,140,80,0.2) 35px, rgba(180,140,80,0.2) 36px)",
-        }}
-      />
+      <div className="absolute inset-0 opacity-30" style={{ backgroundImage: BOARD_BG }} />
+
       {/* 魚イラスト */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="text-5xl opacity-30" style={{ transform: `scale(${0.8 + stage.silhouetteScale * 0.4})` }}>
+        <div className="text-5xl opacity-25" style={{ transform: `scale(${0.8 + stage.silhouetteScale * 0.4})` }}>
           🐟
         </div>
       </div>
 
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${AREA_W} ${AREA_H}`}>
-        {/* 切り込みターゲット */}
+      <svg {...SVG_PROPS}>
+        {/* 操作ゾーン表示（左半分をハイライト） */}
+        <rect x={0} y={0} width={AREA_W / 2} height={AREA_H}
+          fill={isActive ? "rgba(239,68,68,0.08)" : "rgba(59,130,246,0.06)"}
+        />
+
+        {/* 包丁ターゲット円 */}
         <circle
           cx={ENTRY_CIRCLE_X} cy={ENTRY_CIRCLE_Y} r={ENTRY_CIRCLE_R}
-          fill="none" stroke={isActive ? "#ef4444" : "#3b82f6"}
+          fill={isActive ? "rgba(239,68,68,0.15)" : "rgba(59,130,246,0.1)"}
+          stroke={isActive ? "#ef4444" : "#3b82f6"}
           strokeWidth={3} strokeDasharray={isActive ? "none" : "6,4"}
           className={isActive ? "" : "animate-pulse"}
         />
+
         {/* プログレスリング */}
         {isActive && holdProgress > 0 && (
           <circle
             cx={ENTRY_CIRCLE_X} cy={ENTRY_CIRCLE_Y} r={ENTRY_CIRCLE_R}
-            fill="none" stroke="#ef4444" strokeWidth={4}
-            strokeDasharray={`${holdProgress * Math.PI * 2 * ENTRY_CIRCLE_R} ${Math.PI * 2 * ENTRY_CIRCLE_R}`}
-            strokeDashoffset={Math.PI * 0.5 * ENTRY_CIRCLE_R}
+            fill="none" stroke="#ef4444" strokeWidth={5}
+            strokeDasharray={`${holdProgress * circumference} ${circumference}`}
+            strokeDashoffset={circumference * 0.25}
             strokeLinecap="round"
           />
         )}
+
         {/* 包丁アイコン */}
-        <text
-          x={ENTRY_CIRCLE_X} y={ENTRY_CIRCLE_Y + 5}
-          textAnchor="middle" fontSize={18}
-        >
-          🔪
-        </text>
-        {/* 矢印（頭→体方向を示す） */}
-        <line x1={ENTRY_CIRCLE_X + ENTRY_CIRCLE_R + 10} y1={ENTRY_CIRCLE_Y}
+        <text x={ENTRY_CIRCLE_X} y={ENTRY_CIRCLE_Y + 6} textAnchor="middle" fontSize={22}>🔪</text>
+
+        {/* 矢印 */}
+        <line x1={ENTRY_CIRCLE_X + ENTRY_CIRCLE_R + 12} y1={ENTRY_CIRCLE_Y}
               x2={AREA_W - 40} y2={ENTRY_CIRCLE_Y}
               stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5,5" />
         <polygon
@@ -1252,18 +1242,19 @@ function CutEntryArea({ stage, isActive, holdProgress, onStart, onMove, onEnd }:
         />
       </svg>
 
-      <div className="absolute bottom-1.5 left-0 right-0 text-center">
-        <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
-          {isActive ? `包丁を入れています... ${Math.round(holdProgress * 100)}%` : "頭の付け根を長押し"}
+      <div className="absolute bottom-2 left-0 right-0 text-center">
+        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+          isActive ? "bg-red-500 text-white" : "bg-blue-500 text-white animate-pulse"
+        }`}>
+          {isActive ? `包丁を入れています... ${Math.round(holdProgress * 100)}%` : "🔪 左側を長押しして包丁を入れる"}
         </span>
       </div>
     </div>
   );
 }
 
-// ── 中骨スライド ──
+// ── 2. 中骨スライド ──
 interface CutSlideAreaProps {
-  fish: CaughtFish;
   isActive: boolean;
   slidePoints?: { x: number; y: number; t: number }[];
   speedZone?: "slow" | "ideal" | "fast";
@@ -1274,14 +1265,14 @@ interface CutSlideAreaProps {
 
 function CutSlideArea({ isActive, slidePoints, speedZone, onStart, onMove, onEnd }: CutSlideAreaProps) {
   const zoneColor = speedZone === "fast" ? "#ef4444" : speedZone === "ideal" ? "#22c55e" : "#94a3b8";
-  const zoneLabel = speedZone === "fast" ? "速すぎる！" : speedZone === "ideal" ? "スルスル..." : "ゆっくり...";
+  const zoneLabel = speedZone === "fast" ? "速すぎる！身が削れる！" : speedZone === "ideal" ? "スルスル...完璧！" : "";
   const progress = slidePoints && slidePoints.length > 0
     ? Math.min(1, (slidePoints[slidePoints.length - 1].x - BONE_START_X) / (BONE_END_X - BONE_START_X))
     : 0;
 
   return (
     <div
-      className="relative bg-gradient-to-b from-amber-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200"
+      className="relative bg-gradient-to-b from-amber-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border-2 border-amber-300"
       style={{ height: AREA_H }}
       onMouseDown={onStart}
       onMouseMove={onMove}
@@ -1291,45 +1282,48 @@ function CutSlideArea({ isActive, slidePoints, speedZone, onStart, onMove, onEnd
       onTouchMove={onMove}
       onTouchEnd={onEnd}
     >
-      <div className="absolute inset-0 opacity-30"
-        style={{ backgroundImage: "repeating-linear-gradient(90deg, transparent, transparent 35px, rgba(180,140,80,0.2) 35px, rgba(180,140,80,0.2) 36px)" }}
-      />
+      <div className="absolute inset-0 opacity-30" style={{ backgroundImage: BOARD_BG }} />
 
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${AREA_W} ${AREA_H}`}>
-        {/* 中骨ライン（少し波打つ） */}
+      <svg {...SVG_PROPS}>
+        {/* 開始ゾーンハイライト */}
+        {!isActive && (
+          <rect x={0} y={0} width={AREA_W * 0.4} height={AREA_H}
+            fill="rgba(59,130,246,0.06)"
+          />
+        )}
+
+        {/* 中骨ライン */}
         <path
           d={`M ${BONE_START_X} ${BONE_Y} Q ${AREA_W * 0.35} ${BONE_Y - 3} ${AREA_W / 2} ${BONE_Y} Q ${AREA_W * 0.65} ${BONE_Y + 3} ${BONE_END_X} ${BONE_Y}`}
           fill="none"
           stroke={isActive ? zoneColor : "#64748b"}
-          strokeWidth={isActive ? 4 : 3}
+          strokeWidth={isActive ? 5 : 4}
           strokeDasharray={isActive ? "none" : "8,5"}
           strokeLinecap="round"
         />
-        {/* 骨の模様（小さな横棒） */}
+        {/* 骨模様 */}
         {Array.from({ length: 8 }).map((_, i) => {
           const x = BONE_START_X + (BONE_END_X - BONE_START_X) * ((i + 1) / 9);
           return (
-            <line key={i}
-              x1={x} y1={BONE_Y - 8} x2={x} y2={BONE_Y + 8}
-              stroke="rgba(100,116,139,0.3)" strokeWidth={1.5}
-            />
+            <line key={i} x1={x} y1={BONE_Y - 10} x2={x} y2={BONE_Y + 10}
+              stroke="rgba(100,116,139,0.3)" strokeWidth={1.5} />
           );
         })}
 
         {/* 始点マーカー */}
-        <circle cx={BONE_START_X} cy={BONE_Y} r={10}
+        <circle cx={BONE_START_X} cy={BONE_Y} r={14}
           fill={isActive ? zoneColor : "#dbeafe"} stroke={isActive ? zoneColor : "#3b82f6"}
-          strokeWidth={2} className={isActive ? "" : "animate-pulse"}
+          strokeWidth={2.5} className={isActive ? "" : "animate-pulse"}
         />
-        <text x={BONE_START_X} y={BONE_Y + 3.5} textAnchor="middle" fontSize={8} fontWeight="bold"
+        <text x={BONE_START_X} y={BONE_Y + 4} textAnchor="middle" fontSize={9} fontWeight="bold"
           fill={isActive ? "#fff" : "#1e40af"}>始</text>
 
         {/* 終点マーカー */}
-        <circle cx={BONE_END_X} cy={BONE_Y} r={8}
-          fill="none" stroke="#64748b" strokeWidth={2} strokeDasharray="3,3"
-        />
+        <circle cx={BONE_END_X} cy={BONE_Y} r={10}
+          fill="none" stroke="#64748b" strokeWidth={2} strokeDasharray="3,3" />
+        <text x={BONE_END_X} y={BONE_Y + 3.5} textAnchor="middle" fontSize={8} fill="#64748b">終</text>
 
-        {/* プレイヤーの軌跡 */}
+        {/* 軌跡 */}
         {slidePoints && slidePoints.length > 1 && (
           <polyline
             points={slidePoints.map((p) => `${p.x},${p.y}`).join(" ")}
@@ -1340,12 +1334,10 @@ function CutSlideArea({ isActive, slidePoints, speedZone, onStart, onMove, onEnd
       </svg>
 
       {/* 速度インジケーター */}
-      {isActive && (
+      {isActive && zoneLabel && (
         <div className="absolute top-2 right-2">
-          <div className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-            speedZone === "fast" ? "bg-red-500 text-white animate-pulse" :
-            speedZone === "ideal" ? "bg-green-500 text-white" :
-            "bg-gray-300 text-gray-600"
+          <div className={`text-xs font-bold px-2 py-1 rounded-full ${
+            speedZone === "fast" ? "bg-red-500 text-white animate-pulse" : "bg-green-500 text-white"
           }`}>
             {zoneLabel}
           </div>
@@ -1354,21 +1346,23 @@ function CutSlideArea({ isActive, slidePoints, speedZone, onStart, onMove, onEnd
 
       {/* 進捗バー */}
       {isActive && (
-        <div className="absolute top-2 left-2 w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className="absolute top-2 left-2 w-20 h-2.5 bg-gray-200 rounded-full overflow-hidden">
           <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${progress * 100}%` }} />
         </div>
       )}
 
-      <div className="absolute bottom-1.5 left-0 right-0 text-center">
-        <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
-          {isActive ? "骨に沿ってゆっくり..." : "左の始点からスワイプ開始"}
+      <div className="absolute bottom-2 left-0 right-0 text-center">
+        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+          isActive ? "bg-orange-500 text-white" : "bg-blue-500 text-white animate-pulse"
+        }`}>
+          {isActive ? "骨に沿ってゆっくり右へ..." : "🦴 左側からゆっくり右へスワイプ"}
         </span>
       </div>
     </div>
   );
 }
 
-// ── 腹骨すく ──
+// ── 3. 腹骨すく ──
 interface CutBellyAreaProps {
   fish: CaughtFish;
   isActive: boolean;
@@ -1386,7 +1380,7 @@ function CutBellyArea({ fish, isActive, bellyArc, bellyPoints, onStart, onMove, 
 
   return (
     <div
-      className="relative bg-gradient-to-b from-amber-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200"
+      className="relative bg-gradient-to-b from-amber-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border-2 border-amber-300"
       style={{ height: AREA_H }}
       onMouseDown={onStart}
       onMouseMove={onMove}
@@ -1396,35 +1390,35 @@ function CutBellyArea({ fish, isActive, bellyArc, bellyPoints, onStart, onMove, 
       onTouchMove={onMove}
       onTouchEnd={onEnd}
     >
-      <div className="absolute inset-0 opacity-30"
-        style={{ backgroundImage: "repeating-linear-gradient(90deg, transparent, transparent 35px, rgba(180,140,80,0.2) 35px, rgba(180,140,80,0.2) 36px)" }}
-      />
+      <div className="absolute inset-0 opacity-30" style={{ backgroundImage: BOARD_BG }} />
 
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${AREA_W} ${AREA_H}`}>
-        {/* 腹骨の弧ガイドライン */}
+      <svg {...SVG_PROPS}>
+        {/* 腹骨弧ガイドライン */}
         <polyline
           points={arc.map((p) => `${p.x},${p.y}`).join(" ")}
           fill="none"
           stroke={isActive ? "#f59e0b" : "#3b82f6"}
-          strokeWidth={isActive ? 3.5 : 3}
+          strokeWidth={isActive ? 4.5 : 4}
           strokeDasharray={isActive ? "none" : "6,4"}
           strokeLinecap="round"
         />
 
-        {/* 始点マーカー */}
-        <circle cx={arc[0].x} cy={arc[0].y} r={10}
-          fill={isActive ? "#f59e0b" : "#dbeafe"} stroke={isActive ? "#f59e0b" : "#3b82f6"}
-          strokeWidth={2} className={isActive ? "" : "animate-pulse"}
+        {/* 始点マーカー（大きめ） */}
+        <circle cx={arc[0].x} cy={arc[0].y} r={16}
+          fill={isActive ? "rgba(245,158,11,0.3)" : "rgba(59,130,246,0.15)"}
+          stroke={isActive ? "#f59e0b" : "#3b82f6"}
+          strokeWidth={2.5} className={isActive ? "" : "animate-pulse"}
         />
-        <text x={arc[0].x} y={arc[0].y + 3.5} textAnchor="middle" fontSize={8} fontWeight="bold"
-          fill={isActive ? "#fff" : "#1e40af"}>始</text>
+        <text x={arc[0].x} y={arc[0].y + 4} textAnchor="middle" fontSize={9} fontWeight="bold"
+          fill={isActive ? "#92400e" : "#1e40af"}>始</text>
 
         {/* 終点マーカー */}
-        <circle cx={arc[arc.length - 1].x} cy={arc[arc.length - 1].y} r={8}
-          fill="none" stroke="#64748b" strokeWidth={2} strokeDasharray="3,3"
-        />
+        <circle cx={arc[arc.length - 1].x} cy={arc[arc.length - 1].y} r={12}
+          fill="none" stroke="#64748b" strokeWidth={2} strokeDasharray="3,3" />
+        <text x={arc[arc.length - 1].x} y={arc[arc.length - 1].y + 3.5}
+          textAnchor="middle" fontSize={8} fill="#64748b">終</text>
 
-        {/* プレイヤーの軌跡 */}
+        {/* 軌跡 */}
         {bellyPoints && bellyPoints.length > 1 && (
           <polyline
             points={bellyPoints.map((p) => `${p.x},${p.y}`).join(" ")}
@@ -1433,22 +1427,23 @@ function CutBellyArea({ fish, isActive, bellyArc, bellyPoints, onStart, onMove, 
           />
         )}
 
-        {/* 魚体の輪郭（腹部ハイライト） */}
+        {/* 魚体輪郭 */}
         <ellipse cx={AREA_W / 2} cy={AREA_H / 2 - 8} rx={90} ry={35}
-          fill="none" stroke="rgba(100,116,139,0.15)" strokeWidth={1.5}
-        />
+          fill="none" stroke="rgba(100,116,139,0.12)" strokeWidth={1.5} />
       </svg>
 
-      <div className="absolute bottom-1.5 left-0 right-0 text-center">
-        <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
-          {isActive ? "腹骨に沿って丁寧に..." : "弧の始点からスワイプ"}
+      <div className="absolute bottom-2 left-0 right-0 text-center">
+        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+          isActive ? "bg-amber-500 text-white" : "bg-blue-500 text-white animate-pulse"
+        }`}>
+          {isActive ? "弧に沿って丁寧に..." : "🔻 始点から弧に沿ってスワイプ"}
         </span>
       </div>
     </div>
   );
 }
 
-// ── シャリを取る ──
+// ── 4. シャリを取る ──
 interface NigiriRiceAreaProps {
   fish: CaughtFish;
   riceRatio: number;
@@ -1461,86 +1456,75 @@ function NigiriRiceArea({ fish, riceRatio, isActive, onStart, onEnd }: NigiriRic
   const fishData = FISH_DATABASE[fish.species];
   const stage = fishData.stages[fish.stageIndex];
   const idealRatio = getIdealRiceRatio(stage.size);
-  const idealMin = idealRatio - 0.08;
-  const idealMax = idealRatio + 0.08;
+  const idealMin = idealRatio - 0.10;
+  const idealMax = idealRatio + 0.10;
   const inIdealZone = riceRatio >= idealMin && riceRatio <= idealMax;
-
-  // シャリの表示サイズ
   const riceSize = 20 + riceRatio * 50;
 
   return (
     <div
-      className="relative bg-gradient-to-b from-yellow-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200 cursor-pointer"
+      className="relative bg-gradient-to-b from-yellow-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border-2 border-green-300 cursor-pointer"
       style={{ height: AREA_H }}
       onMouseDown={onStart}
       onMouseUp={onEnd}
       onTouchStart={(e) => { e.preventDefault(); onStart(e); }}
       onTouchEnd={onEnd}
     >
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${AREA_W} ${AREA_H}`}>
+      <svg {...SVG_PROPS}>
         {/* シャリ桶 */}
-        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 20} rx={60} ry={25}
-          fill="#fef3c7" stroke="#d97706" strokeWidth={2}
-        />
-        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 10} rx={60} ry={25}
-          fill="#fffbeb" stroke="#d97706" strokeWidth={2}
-        />
-        {/* シャリの粒感 */}
+        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 22} rx={65} ry={28}
+          fill="#fef3c7" stroke="#d97706" strokeWidth={2} />
+        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 10} rx={65} ry={28}
+          fill="#fffbeb" stroke="#d97706" strokeWidth={2} />
         {Array.from({ length: 12 }).map((_, i) => {
           const angle = (i / 12) * Math.PI * 2;
           return (
             <circle key={i}
-              cx={AREA_W / 2 + Math.cos(angle) * 35}
-              cy={AREA_H / 2 + 10 + Math.sin(angle) * 14}
-              r={2} fill="rgba(217,119,6,0.25)"
-            />
+              cx={AREA_W / 2 + Math.cos(angle) * 40}
+              cy={AREA_H / 2 + 10 + Math.sin(angle) * 16}
+              r={2} fill="rgba(217,119,6,0.25)" />
           );
         })}
 
         {/* 成長するシャリ玉 */}
         {isActive && (
           <ellipse
-            cx={AREA_W / 2} cy={AREA_H / 2 - 20}
+            cx={AREA_W / 2} cy={AREA_H / 2 - 22}
             rx={riceSize * 0.7} ry={riceSize * 0.4}
             fill={inIdealZone ? "#86efac" : "#fffbeb"}
             stroke={inIdealZone ? "#16a34a" : "#d97706"}
-            strokeWidth={2}
+            strokeWidth={2.5}
           />
         )}
 
         {/* サイズゲージ */}
-        <rect x={AREA_W - 25} y={15} width={10} height={AREA_H - 30}
-          fill="#e5e7eb" rx={5}
-        />
-        {/* 理想ゾーン */}
+        <rect x={AREA_W - 28} y={12} width={12} height={AREA_H - 24}
+          fill="#e5e7eb" rx={6} />
         <rect
-          x={AREA_W - 25}
-          y={15 + (AREA_H - 30) * (1 - idealMax)}
-          width={10}
-          height={(AREA_H - 30) * (idealMax - idealMin)}
-          fill="#86efac" rx={2}
-        />
-        {/* 現在値 */}
+          x={AREA_W - 28}
+          y={12 + (AREA_H - 24) * (1 - idealMax)}
+          width={12}
+          height={(AREA_H - 24) * (idealMax - idealMin)}
+          fill="#86efac" rx={3} />
         {isActive && (
           <circle
-            cx={AREA_W - 20}
-            cy={15 + (AREA_H - 30) * (1 - riceRatio)}
-            r={5}
+            cx={AREA_W - 22}
+            cy={12 + (AREA_H - 24) * (1 - riceRatio)}
+            r={6}
             fill={inIdealZone ? "#16a34a" : "#d97706"}
-            stroke="#fff" strokeWidth={1.5}
-          />
+            stroke="#fff" strokeWidth={2} />
         )}
-
-        {/* サイズラベル */}
-        <text x={AREA_W - 20} y={12} textAnchor="middle" fontSize={7} fill="#6b7280">大</text>
-        <text x={AREA_W - 20} y={AREA_H - 2} textAnchor="middle" fontSize={7} fill="#6b7280">小</text>
+        <text x={AREA_W - 22} y={10} textAnchor="middle" fontSize={7} fill="#6b7280">大</text>
+        <text x={AREA_W - 22} y={AREA_H - 2} textAnchor="middle" fontSize={7} fill="#6b7280">小</text>
       </svg>
 
-      <div className="absolute bottom-1.5 left-0 right-0 text-center">
-        <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
+      <div className="absolute bottom-2 left-0 right-0 text-center">
+        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+          isActive ? (inIdealZone ? "bg-green-500 text-white animate-pulse" : "bg-amber-500 text-white") : "bg-green-500 text-white animate-pulse"
+        }`}>
           {isActive
-            ? (inIdealZone ? "今だ！離して取る！" : `シャリを握り中... ${Math.round(riceRatio * 100)}%`)
-            : `タップ長押しでシャリを取る（${stage.size === "small" ? "小さめ" : stage.size === "large" ? "大きめ" : "中くらい"}が理想）`
+            ? (inIdealZone ? "今だ！指を離してシャリを取る！" : `シャリを握り中... ${Math.round(riceRatio * 100)}%`)
+            : `🍚 どこでも長押し → 緑ゾーンで離す（${stage.size === "small" ? "小さめ" : stage.size === "large" ? "大きめ" : "中くらい"}）`
           }
         </span>
       </div>
@@ -1548,74 +1532,64 @@ function NigiriRiceArea({ fish, riceRatio, isActive, onStart, onEnd }: NigiriRic
   );
 }
 
-// ── ピンチ ──
+// ── 5. ピンチ ──
 interface NigiriPinchAreaProps {
-  fish: CaughtFish;
   isActive: boolean;
   pinchSamples?: number[];
   pinchStartDist?: number;
   onTouchStart: (e: React.TouchEvent) => void;
   onTouchMove: (e: React.TouchEvent) => void;
   onTouchEnd: () => void;
-  onMouseDown: () => void;
-  onMouseUp: () => void;
+  onClick: () => void;
 }
 
-function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart, onTouchMove, onTouchEnd, onMouseDown, onMouseUp }: NigiriPinchAreaProps) {
+function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart, onTouchMove, onTouchEnd, onClick }: NigiriPinchAreaProps) {
   const progress = isActive && pinchSamples && pinchStartDist && pinchSamples.length > 0
     ? Math.max(0, Math.min(1, 1 - pinchSamples[pinchSamples.length - 1] / pinchStartDist))
     : 0;
-
-  // ネタとシャリの間隔（ピンチで閉じる）
   const gap = 30 * (1 - progress);
 
   return (
     <div
-      className="relative bg-gradient-to-b from-orange-50 to-amber-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200 cursor-pointer"
-      style={{ height: AREA_H }}
+      className="relative bg-gradient-to-b from-orange-50 to-amber-100 rounded-lg overflow-hidden select-none border-2 border-green-300 cursor-pointer"
+      style={{ height: AREA_H, touchAction: "none" }}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      onMouseDown={onMouseDown}
-      onMouseUp={onMouseUp}
+      onClick={onClick}
     >
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${AREA_W} ${AREA_H}`}>
+      <svg {...SVG_PROPS}>
         {/* ネタ（上） */}
         <ellipse
           cx={AREA_W / 2} cy={AREA_H / 2 - gap / 2 - 12}
-          rx={45} ry={14}
-          fill="#fb923c" stroke="#ea580c" strokeWidth={1.5}
-        />
+          rx={50} ry={16}
+          fill="#fb923c" stroke="#ea580c" strokeWidth={1.5} />
         <text x={AREA_W / 2} y={AREA_H / 2 - gap / 2 - 10}
-          textAnchor="middle" fontSize={8} fill="#7c2d12">ネタ</text>
+          textAnchor="middle" fontSize={9} fill="#7c2d12" fontWeight="bold">ネタ</text>
 
         {/* シャリ（下） */}
         <ellipse
           cx={AREA_W / 2} cy={AREA_H / 2 + gap / 2 + 12}
-          rx={40} ry={16}
-          fill="#fffbeb" stroke="#d97706" strokeWidth={1.5}
-        />
+          rx={45} ry={18}
+          fill="#fffbeb" stroke="#d97706" strokeWidth={1.5} />
         <text x={AREA_W / 2} y={AREA_H / 2 + gap / 2 + 14}
-          textAnchor="middle" fontSize={8} fill="#92400e">シャリ</text>
+          textAnchor="middle" fontSize={9} fill="#92400e" fontWeight="bold">シャリ</text>
 
-        {/* ピンチ矢印（閉じる方向） */}
+        {/* ピンチ矢印 */}
         {!isActive && (
           <>
-            {/* 左手指イメージ */}
-            <text x={AREA_W / 2 - 55} y={AREA_H / 2 + 5} fontSize={20}>👆</text>
-            <line x1={AREA_W / 2 - 40} y1={AREA_H / 2}
-                  x2={AREA_W / 2 - 15} y2={AREA_H / 2}
-                  stroke="#3b82f6" strokeWidth={2} markerEnd="url(#arrowBlue)" />
-            {/* 右手指イメージ */}
-            <text x={AREA_W / 2 + 38} y={AREA_H / 2 + 5} fontSize={20}>👆</text>
-            <line x1={AREA_W / 2 + 40} y1={AREA_H / 2}
-                  x2={AREA_W / 2 + 15} y2={AREA_H / 2}
-                  stroke="#3b82f6" strokeWidth={2} markerEnd="url(#arrowBlue)" />
-            <defs>
-              <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0,0 8,3 0,6" fill="#3b82f6" />
-              </marker>
-            </defs>
+            <text x={AREA_W / 2 - 60} y={AREA_H / 2 + 7} fontSize={22}>👆</text>
+            <line x1={AREA_W / 2 - 42} y1={AREA_H / 2}
+                  x2={AREA_W / 2 - 12} y2={AREA_H / 2}
+                  stroke="#3b82f6" strokeWidth={2.5} />
+            <polygon points={`${AREA_W / 2 - 15},${AREA_H / 2 - 4} ${AREA_W / 2 - 8},${AREA_H / 2} ${AREA_W / 2 - 15},${AREA_H / 2 + 4}`}
+              fill="#3b82f6" />
+            <text x={AREA_W / 2 + 42} y={AREA_H / 2 + 7} fontSize={22}>👆</text>
+            <line x1={AREA_W / 2 + 42} y1={AREA_H / 2}
+                  x2={AREA_W / 2 + 12} y2={AREA_H / 2}
+                  stroke="#3b82f6" strokeWidth={2.5} />
+            <polygon points={`${AREA_W / 2 + 15},${AREA_H / 2 - 4} ${AREA_W / 2 + 8},${AREA_H / 2} ${AREA_W / 2 + 15},${AREA_H / 2 + 4}`}
+              fill="#3b82f6" />
           </>
         )}
 
@@ -1623,20 +1597,21 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
         {isActive && (
           <circle
             cx={AREA_W / 2} cy={AREA_H / 2}
-            r={35} fill="none"
-            stroke="#22c55e" strokeWidth={3}
-            strokeDasharray={`${progress * Math.PI * 70} ${Math.PI * 70}`}
+            r={38} fill="none"
+            stroke="#22c55e" strokeWidth={3.5}
+            strokeDasharray={`${progress * Math.PI * 76} ${Math.PI * 76}`}
             strokeLinecap="round"
-            transform={`rotate(-90 ${AREA_W / 2} ${AREA_H / 2})`}
-          />
+            transform={`rotate(-90 ${AREA_W / 2} ${AREA_H / 2})`} />
         )}
       </svg>
 
-      <div className="absolute bottom-1.5 left-0 right-0 text-center">
-        <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
+      <div className="absolute bottom-2 left-0 right-0 text-center">
+        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+          isActive ? "bg-green-500 text-white" : "bg-green-500 text-white animate-pulse"
+        }`}>
           {isActive
             ? `合わせ中... ${Math.round(progress * 100)}%`
-            : "二本指で挟んで合わせる（PCはクリック）"
+            : "🤏 二本指ピンチで合わせる（PCはクリック）"
           }
         </span>
       </div>
@@ -1644,7 +1619,7 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
   );
 }
 
-// ── 本手返し（圧力ゲージ） ──
+// ── 6. 本手返し ──
 interface NigiriPressAreaProps {
   fish: CaughtFish;
   pressRatio: number;
@@ -1660,83 +1635,71 @@ function NigiriPressArea({ fish, pressRatio, isActive, onStart, onEnd }: NigiriP
   const inSweet = pressRatio >= lo && pressRatio <= hi;
   const tooSoft = pressRatio < lo;
 
-  // 寿司の見た目（圧で形が変わる）
-  const squish = 1 + pressRatio * 0.3; // 横に広がる
-  const squishY = 1 - pressRatio * 0.15; // 縦が縮む
+  const squish = 1 + pressRatio * 0.3;
+  const squishY = 1 - pressRatio * 0.15;
 
   return (
     <div
-      className="relative bg-gradient-to-b from-yellow-50 to-orange-100 rounded-lg overflow-hidden select-none touch-none border border-amber-200 cursor-pointer"
+      className="relative bg-gradient-to-b from-yellow-50 to-orange-100 rounded-lg overflow-hidden select-none touch-none border-2 border-green-300 cursor-pointer"
       style={{ height: AREA_H }}
       onMouseDown={onStart}
       onMouseUp={onEnd}
       onTouchStart={(e) => { e.preventDefault(); onStart(e); }}
       onTouchEnd={onEnd}
     >
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${AREA_W} ${AREA_H}`}>
-        {/* 圧力ゲージ（左側） */}
-        <rect x={15} y={15} width={14} height={AREA_H - 30}
-          fill="#e5e7eb" rx={7}
-        />
-        {/* スイートスポットゾーン */}
+      <svg {...SVG_PROPS}>
+        {/* 圧力ゲージ */}
+        <rect x={15} y={12} width={16} height={AREA_H - 24}
+          fill="#e5e7eb" rx={8} />
         <rect
           x={15}
-          y={15 + (AREA_H - 30) * (1 - hi)}
-          width={14}
-          height={(AREA_H - 30) * (hi - lo)}
-          fill="rgba(34,197,94,0.5)" rx={3}
-        />
-        {/* 現在の圧力 */}
+          y={12 + (AREA_H - 24) * (1 - hi)}
+          width={16}
+          height={(AREA_H - 24) * (hi - lo)}
+          fill="rgba(34,197,94,0.5)" rx={4} />
         <rect
           x={15}
-          y={15 + (AREA_H - 30) * (1 - pressRatio)}
-          width={14}
-          height={Math.max(2, (AREA_H - 30) * pressRatio)}
+          y={12 + (AREA_H - 24) * (1 - pressRatio)}
+          width={16}
+          height={Math.max(3, (AREA_H - 24) * pressRatio)}
           fill={inSweet ? "#22c55e" : pressRatio > hi ? "#ef4444" : "#fbbf24"}
-          rx={3}
-        />
-        {/* ゲージラベル */}
-        <text x={22} y={12} textAnchor="middle" fontSize={7} fill="#6b7280">強</text>
-        <text x={22} y={AREA_H - 2} textAnchor="middle" fontSize={7} fill="#6b7280">弱</text>
+          rx={4} />
+        <text x={23} y={10} textAnchor="middle" fontSize={7} fill="#6b7280">強</text>
+        <text x={23} y={AREA_H - 2} textAnchor="middle" fontSize={7} fill="#6b7280">弱</text>
 
         {/* 寿司 */}
-        <g transform={`translate(${AREA_W / 2}, ${AREA_H / 2 + 5})`}>
-          {/* シャリ */}
-          <ellipse cx={0} cy={8} rx={35 * squish} ry={18 * squishY}
-            fill="#fffbeb" stroke="#d97706" strokeWidth={1.5}
-          />
-          {/* ネタ */}
-          <ellipse cx={0} cy={-5} rx={38 * squish} ry={12 * squishY}
-            fill="#fb923c" stroke="#ea580c" strokeWidth={1.5}
-          />
-          {/* 光沢 */}
-          <ellipse cx={-8} cy={-8} rx={12} ry={4}
-            fill="rgba(255,255,255,0.3)"
-          />
+        <g transform={`translate(${AREA_W / 2 + 10}, ${AREA_H / 2 + 5})`}>
+          <ellipse cx={0} cy={8} rx={38 * squish} ry={20 * squishY}
+            fill="#fffbeb" stroke="#d97706" strokeWidth={1.5} />
+          <ellipse cx={0} cy={-5} rx={42 * squish} ry={14 * squishY}
+            fill="#fb923c" stroke="#ea580c" strokeWidth={1.5} />
+          <ellipse cx={-10} cy={-8} rx={14} ry={5}
+            fill="rgba(255,255,255,0.3)" />
         </g>
 
         {/* 状態テキスト */}
         {isActive && (
           <text
-            x={AREA_W / 2} y={25}
-            textAnchor="middle" fontSize={13} fontWeight="bold"
+            x={AREA_W / 2 + 10} y={22}
+            textAnchor="middle" fontSize={14} fontWeight="bold"
             fill={inSweet ? "#16a34a" : pressRatio > hi ? "#dc2626" : "#d97706"}
           >
             {inSweet ? "今だ！離す！" : tooSoft ? "もう少し..." : "強すぎ！"}
           </text>
         )}
 
-        {/* 手のアイコン */}
         {!isActive && (
-          <text x={AREA_W / 2} y={AREA_H / 2 + 6} textAnchor="middle" fontSize={24}>🤲</text>
+          <text x={AREA_W / 2 + 10} y={AREA_H / 2 + 8} textAnchor="middle" fontSize={28}>🤲</text>
         )}
       </svg>
 
-      <div className="absolute bottom-1.5 left-0 right-0 text-center">
-        <span className="text-xs bg-black/30 text-white px-2 py-0.5 rounded-full">
+      <div className="absolute bottom-2 left-0 right-0 text-center">
+        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+          isActive ? (inSweet ? "bg-green-500 text-white animate-pulse" : "bg-amber-500 text-white") : "bg-green-500 text-white animate-pulse"
+        }`}>
           {isActive
-            ? `圧 ${Math.round(pressRatio * 100)}% — ${inSweet ? "完璧な圧！離せ！" : tooSoft ? "もっと押す..." : "強すぎる！早く離せ！"}`
-            : "長押しして握る — 緑のゾーンで離す"
+            ? `圧 ${Math.round(pressRatio * 100)}% — ${inSweet ? "完璧！指を離せ！" : tooSoft ? "もっと押し続ける..." : "強すぎる！早く離せ！"}`
+            : "🤲 長押しして握る → 緑のゾーンで離す"
           }
         </span>
       </div>
