@@ -25,7 +25,7 @@ type PrepState =
   | "cut-slide"    // 中骨に沿って滑らせる（速度制御スワイプ）
   | "cut-belly"    // 腹骨をすく（弧スワイプ）
   | "nigiri-rice"  // シャリを取る（長押しでサイズ決定）
-  | "nigiri-pinch" // ネタと合わせる（二本指ピンチ）
+  | "nigiri-pinch" // ネタと合わせる（縦ドラッグ）
   | "nigiri-press" // 本手返し（圧力ゲージ）
   | "done";
 
@@ -42,6 +42,7 @@ interface PrepProgress {
   nigiriScore: number;
   avgAccuracy: number;
   perfect: boolean;
+  bellyArcSeed?: number;
 }
 
 // 限定メニュー: カウンターに出した寿司
@@ -78,8 +79,7 @@ const BELLY_ARC_POINTS = 20;
 
 // ── 握りパラメータ ──
 const RICE_MAX_HOLD_MS = 1800;
-const PINCH_INITIAL_DIST = 100;
-const PINCH_COMPLETE_DIST = 25;
+const PINCH_TARGET_DRAG = 70;  // ピンチ相当の縦ドラッグ目標ピクセル数
 const PRESS_MAX_MS = 2200;
 
 function getIdealRiceRatio(size: "small" | "medium" | "large"): number {
@@ -98,14 +98,25 @@ function getIdealPressRange(size: "small" | "medium" | "large"): [number, number
   }
 }
 
-function generateBellyArc(difficulty: number): { x: number; y: number }[] {
+function generateBellyArc(difficulty: number, seed: number): { x: number; y: number }[] {
   const points: { x: number; y: number }[] = [];
-  const startX = AREA_W * 0.65;
-  const startY = AREA_H * 0.32;
-  const endX = AREA_W * 0.25;
-  const endY = AREA_H * 0.78;
-  const cpX = AREA_W * (0.25 + difficulty * 0.15);
-  const cpY = AREA_H * 0.25;
+  // 4方向 × 角度微変動 で毎回違う弧を生成
+  const variant = Math.floor((seed * 997) % 4);       // 0..3
+  const tilt = ((seed * 131) % 1) - 0.5;              // -0.5..0.5
+  const bow  = ((seed * 53) % 1);                     // 0..1
+  const ltr = variant % 2 === 0;                       // left→right / right→left
+  const topArc = variant < 2;                          // 上に反る / 下に反る
+
+  const startX = AREA_W * (ltr ? 0.22 : 0.78);
+  const endX   = AREA_W * (ltr ? 0.78 : 0.22);
+  const startY = AREA_H * (topArc ? 0.32 + tilt * 0.12 : 0.72 + tilt * 0.10);
+  const endY   = AREA_H * (topArc ? 0.78 - tilt * 0.10 : 0.28 - tilt * 0.12);
+
+  // 制御点：上弧なら山を上に、下弧なら下に。bow で弧の深さが変わる
+  const cpBaseY = topArc ? 0.05 + bow * 0.18 : 0.95 - bow * 0.18;
+  const cpBaseX = 0.35 + bow * 0.30 + difficulty * 0.08;   // difficulty で横位置もズラす
+  const cpX = AREA_W * (ltr ? cpBaseX : 1 - cpBaseX);
+  const cpY = AREA_H * cpBaseY;
 
   for (let i = 0; i <= BELLY_ARC_POINTS; i++) {
     const t = i / BELLY_ARC_POINTS;
@@ -160,7 +171,7 @@ const TUTORIAL_STEPS = [
   { icon: "🦴", title: "2. 中骨に沿う",   desc: "骨ラインをゆっくり右へスワイプ" },
   { icon: "🔻", title: "3. 腹骨をすく",   desc: "弧のガイドに沿ってスワイプ" },
   { icon: "🍚", title: "4. シャリを取る", desc: "長押し → 緑ゾーンで離す" },
-  { icon: "🤏", title: "5. ネタと合わせ", desc: "二本指ピンチ or 上下ドラッグ" },
+  { icon: "👆", title: "5. ネタと合わせ", desc: "画面を上下に素早くドラッグ" },
   { icon: "🤲", title: "6. 本手返し",     desc: "長押し → 緑ゾーンで離す" },
 ];
 
@@ -547,7 +558,7 @@ export default function CookingGame({
 
       setPrepProgress((prev) => {
         const p = prev[fishId] ?? makeInitialPrep(fishId);
-        return { ...prev, [fishId]: { ...p, state: "cut-belly", slideScore } };
+        return { ...prev, [fishId]: { ...p, state: "cut-belly", slideScore, bellyArcSeed: p.bellyArcSeed ?? Math.random() } };
       });
     }
 
@@ -565,7 +576,7 @@ export default function CookingGame({
     activePhaseRef.current = null;
     setPrepProgress((prev) => {
       const p = prev[fishId] ?? makeInitialPrep(fishId);
-      return { ...prev, [fishId]: { ...p, state: "cut-belly", slideScore } };
+      return { ...prev, [fishId]: { ...p, state: "cut-belly", slideScore, bellyArcSeed: p.bellyArcSeed ?? Math.random() } };
     });
     forceTick();
   }, [forceTick]);
@@ -583,7 +594,8 @@ export default function CookingGame({
 
     const fishData = FISH_DATABASE[fish.species];
     const stage = fishData.stages[fish.stageIndex];
-    const arc = generateBellyArc(stage.prepDifficulty);
+    const seed = prepProgress[fish.id]?.bellyArcSeed ?? 0.5;
+    const arc = generateBellyArc(stage.prepDifficulty, seed);
 
     // ★ 開始判定を大幅緩和: 弧の始点から50px以内
     const distToStart = Math.hypot(pos.x - arc[0].x, pos.y - arc[0].y);
@@ -598,7 +610,7 @@ export default function CookingGame({
     };
     vibrate([6]);
     forceTick();
-  }, [forceTick]);
+  }, [forceTick, prepProgress]);
 
   const handleBellyMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     const active = activePhaseRef.current;
@@ -712,39 +724,37 @@ export default function CookingGame({
     forceTick();
   }, [forceTick]);
 
-  // ── 5. ネタと合わせる（ピンチ / クリック） ──
+  // ── 5. ネタと合わせる（単一指/マウスの縦ドラッグ） ──
+  const pinchStartYRef = useRef<number>(0);
 
-  const handlePinchStart = useCallback((fish: CaughtFish, e: React.TouchEvent) => {
-    if (activePhaseRef.current?.phase === "nigiri-pinch" && activePhaseRef.current.fishId === fish.id) return;
-    if (e.touches.length >= 2) {
-      const d = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY,
-      );
-      activePhaseRef.current = {
-        fishId: fish.id,
-        phase: "nigiri-pinch",
-        startTime: performance.now(),
-        pinchSamples: [d],
-        pinchStartDist: d,
-        pinchComplete: false,
-      };
-      vibrate([6]);
-      forceTick();
-    }
+  const startPinch = useCallback((fish: CaughtFish, e: React.PointerEvent) => {
+    if (activePhaseRef.current) return;
+    e.preventDefault();
+    const target = e.currentTarget as HTMLElement;
+    try { target.setPointerCapture(e.pointerId); } catch {}
+    activePhaseRef.current = {
+      fishId: fish.id,
+      phase: "nigiri-pinch",
+      startTime: performance.now(),
+      pinchSamples: [PINCH_TARGET_DRAG],
+      pinchStartDist: PINCH_TARGET_DRAG,
+      pinchComplete: false,
+    };
+    pinchStartYRef.current = e.clientY;
+    activeRectRef.current = target.getBoundingClientRect();
+    vibrate([6]);
+    forceTick();
   }, [forceTick]);
 
-  const handlePinchMove = useCallback((e: React.TouchEvent) => {
+  const handlePinchMove = useCallback((e: React.PointerEvent) => {
     const active = activePhaseRef.current;
     if (!active || active.phase !== "nigiri-pinch" || active.pinchComplete) return;
-    if (e.touches.length < 2) return;
-    const d = Math.hypot(
-      e.touches[0].clientX - e.touches[1].clientX,
-      e.touches[0].clientY - e.touches[1].clientY,
-    );
-    active.pinchSamples!.push(d);
+    // 縦方向の移動量（上下どちらでも OK）
+    const dragged = Math.abs(e.clientY - pinchStartYRef.current);
+    const remaining = Math.max(0, PINCH_TARGET_DRAG - dragged);
+    active.pinchSamples!.push(remaining);
 
-    if (d < PINCH_COMPLETE_DIST) {
+    if (remaining <= 0) {
       active.pinchComplete = true;
       const pinchScore = scorePinch(active.pinchSamples!);
       finishPinch(active.fishId, pinchScore);
@@ -754,56 +764,11 @@ export default function CookingGame({
 
   const handlePinchEnd = useCallback((fish: CaughtFish) => {
     const active = activePhaseRef.current;
-    if (!active || active.phase !== "nigiri-pinch") return;
-    if (active.pinchComplete) return;
-    const pinchScore = active.pinchSamples && active.pinchSamples.length > 2
-      ? scorePinch(active.pinchSamples) * 0.7
-      : 0.3;
-    finishPinch(fish.id, pinchScore);
-  }, []);
-
-  // PC用: マウスドラッグでネタとシャリを寄せる
-  const handlePinchMouseDown = useCallback((fish: CaughtFish, e: React.MouseEvent) => {
-    if (activePhaseRef.current) return;
-    e.preventDefault();
-    activePhaseRef.current = {
-      fishId: fish.id,
-      phase: "nigiri-pinch",
-      startTime: performance.now(),
-      pinchSamples: [PINCH_INITIAL_DIST],
-      pinchStartDist: PINCH_INITIAL_DIST,
-      pinchComplete: false,
-    };
-    activeRectRef.current = e.currentTarget.getBoundingClientRect();
-    vibrate([6]);
-    forceTick();
-  }, [forceTick]);
-
-  const handlePinchMouseMove = useCallback((e: React.MouseEvent) => {
-    const active = activePhaseRef.current;
-    const rect = activeRectRef.current;
-    if (!active || active.phase !== "nigiri-pinch" || active.pinchComplete || !rect) return;
-    // 垂直方向の中心からの距離 × 2 を擬似的な「二本指間距離」として扱う
-    const centerY = rect.top + rect.height / 2;
-    const dy = Math.abs(e.clientY - centerY);
-    const d = Math.max(PINCH_COMPLETE_DIST * 0.6, Math.min(PINCH_INITIAL_DIST, dy * 2));
-    active.pinchSamples!.push(d);
-
-    if (d < PINCH_COMPLETE_DIST) {
-      active.pinchComplete = true;
-      const pinchScore = scorePinch(active.pinchSamples!);
-      finishPinch(active.fishId, pinchScore);
-    }
-    forceTick();
-  }, [forceTick]);
-
-  const handlePinchMouseUp = useCallback((fish: CaughtFish) => {
-    const active = activePhaseRef.current;
     if (!active || active.phase !== "nigiri-pinch" || active.fishId !== fish.id) return;
     if (active.pinchComplete) return;
     // 途中離しはスコア減衰
     const pinchScore = active.pinchSamples && active.pinchSamples.length > 3
-      ? scorePinch(active.pinchSamples) * 0.6
+      ? scorePinch(active.pinchSamples) * 0.5
       : 0;
     finishPinch(fish.id, pinchScore);
   }, []);
@@ -1140,6 +1105,7 @@ export default function CookingGame({
                   isActive={isActiveForThis && active?.phase === "cut-belly"}
                   bellyArc={isActiveForThis ? active?.bellyArc : undefined}
                   bellyPoints={isActiveForThis ? active?.bellyPoints : undefined}
+                  bellyArcSeed={prep?.bellyArcSeed}
                   onStart={(e) => startBelly(fish, e)}
                   onMove={handleBellyMove}
                   onEnd={handleBellyEnd}
@@ -1157,13 +1123,10 @@ export default function CookingGame({
                   isActive={isActiveForThis && active?.phase === "nigiri-pinch"}
                   pinchSamples={isActiveForThis ? active?.pinchSamples : undefined}
                   pinchStartDist={isActiveForThis ? active?.pinchStartDist : undefined}
-                  onTouchStart={(e) => handlePinchStart(fish, e)}
-                  onTouchMove={handlePinchMove}
-                  onTouchEnd={() => handlePinchEnd(fish)}
-                  onMouseDown={(e) => handlePinchMouseDown(fish, e)}
-                  onMouseMove={handlePinchMouseMove}
-                  onMouseUp={() => handlePinchMouseUp(fish)}
-                  onMouseLeave={() => handlePinchMouseUp(fish)}
+                  onPointerDown={(e) => startPinch(fish, e)}
+                  onPointerMove={handlePinchMove}
+                  onPointerUp={() => handlePinchEnd(fish)}
+                  onPointerCancel={() => handlePinchEnd(fish)}
                 />
               ) : currentState === "nigiri-press" ? (
                 <NigiriPressArea
@@ -1421,15 +1384,16 @@ interface CutBellyAreaProps {
   isActive: boolean;
   bellyArc?: { x: number; y: number }[];
   bellyPoints?: { x: number; y: number }[];
+  bellyArcSeed?: number;
   onStart: (e: React.MouseEvent | React.TouchEvent) => void;
   onMove: (e: React.MouseEvent | React.TouchEvent) => void;
   onEnd: () => void;
 }
 
-function CutBellyArea({ fish, isActive, bellyArc, bellyPoints, onStart, onMove, onEnd }: CutBellyAreaProps) {
+function CutBellyArea({ fish, isActive, bellyArc, bellyPoints, bellyArcSeed, onStart, onMove, onEnd }: CutBellyAreaProps) {
   const fishData = FISH_DATABASE[fish.species];
   const stage = fishData.stages[fish.stageIndex];
-  const arc = bellyArc ?? generateBellyArc(stage.prepDifficulty);
+  const arc = bellyArc ?? generateBellyArc(stage.prepDifficulty, bellyArcSeed ?? 0.5);
 
   return (
     <div
@@ -1524,30 +1488,82 @@ function NigiriRiceArea({ fish, riceRatio, isActive, onStart, onEnd }: NigiriRic
       onTouchEnd={onEnd}
     >
       <svg {...SVG_PROPS}>
-        {/* シャリ桶 */}
-        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 22} rx={65} ry={28}
-          fill="#fef3c7" stroke="#d97706" strokeWidth={2} />
-        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 10} rx={65} ry={28}
-          fill="#fffbeb" stroke="#d97706" strokeWidth={2} />
-        {Array.from({ length: 12 }).map((_, i) => {
-          const angle = (i / 12) * Math.PI * 2;
+        {/* シャリ桶（木のおひつ） */}
+        {/* 桶の影 */}
+        <ellipse cx={AREA_W / 2 + 3} cy={AREA_H / 2 + 40} rx={76} ry={6}
+          fill="rgba(0,0,0,0.2)" />
+        {/* 桶の外側（濃い木目） */}
+        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 32} rx={72} ry={14}
+          fill="#92400e" />
+        <path d={`M ${AREA_W/2 - 72} ${AREA_H/2 + 18} L ${AREA_W/2 - 72} ${AREA_H/2 + 32}
+                  A 72 14 0 0 0 ${AREA_W/2 + 72} ${AREA_H/2 + 32}
+                  L ${AREA_W/2 + 72} ${AREA_H/2 + 18} Z`}
+          fill="#b45309" />
+        {/* 木目の縦線 */}
+        {Array.from({ length: 10 }).map((_, i) => {
+          const x = AREA_W/2 - 60 + i * 13;
           return (
-            <circle key={i}
-              cx={AREA_W / 2 + Math.cos(angle) * 40}
-              cy={AREA_H / 2 + 10 + Math.sin(angle) * 16}
-              r={2} fill="rgba(217,119,6,0.25)" />
+            <line key={`g${i}`} x1={x} y1={AREA_H/2 + 18} x2={x} y2={AREA_H/2 + 30}
+              stroke="rgba(69,26,3,0.35)" strokeWidth={0.8} />
           );
         })}
+        {/* 桶の内縁 */}
+        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 18} rx={72} ry={16}
+          fill="#d97706" stroke="#78350f" strokeWidth={1.5} />
+        <ellipse cx={AREA_W / 2} cy={AREA_H / 2 + 16} rx={66} ry={13}
+          fill="#fef3c7" />
 
-        {/* 成長するシャリ玉 */}
+        {/* 桶の中の炊きたてご飯（つやつやの米粒） */}
+        {Array.from({ length: 70 }).map((_, i) => {
+          const seed = i * 13.37 + 7;
+          const rad = ((seed * 0.17) % 1);
+          const a = (i / 70) * Math.PI * 2 + seed * 0.03;
+          const gx = AREA_W/2 + Math.cos(a) * (12 + rad * 52);
+          const gy = AREA_H/2 + 16 + Math.sin(a) * (3 + rad * 10);
+          const rot = (seed * 37) % 180;
+          const pale = (seed * 11) % 3;
+          const fill = pale < 1 ? "#fffef7" : pale < 2 ? "#fffbeb" : "#fef9c3";
+          return (
+            <ellipse key={`r${i}`}
+              cx={gx} cy={gy} rx={2.6} ry={1.3}
+              fill={fill} stroke="rgba(180,100,30,0.18)" strokeWidth={0.3}
+              transform={`rotate(${rot} ${gx} ${gy})`} />
+          );
+        })}
+        {/* 蒸気ハイライト */}
+        <ellipse cx={AREA_W / 2 - 18} cy={AREA_H / 2 + 11} rx={22} ry={3}
+          fill="rgba(255,255,255,0.55)" />
+
+        {/* 成長するシャリ玉（米粒のクラスタ） */}
         {isActive && (
-          <ellipse
-            cx={AREA_W / 2} cy={AREA_H / 2 - 22}
-            rx={riceSize * 0.7} ry={riceSize * 0.4}
-            fill={inIdealZone ? "#86efac" : "#fffbeb"}
-            stroke={inIdealZone ? "#16a34a" : "#d97706"}
-            strokeWidth={2.5}
-          />
+          <g>
+            {/* 影 */}
+            <ellipse cx={AREA_W / 2 + 2} cy={AREA_H / 2 - 14}
+              rx={riceSize * 0.72} ry={riceSize * 0.22}
+              fill="rgba(0,0,0,0.18)" />
+            {/* 米粒のクラスタ（手の中のシャリ玉） */}
+            {Array.from({ length: Math.max(10, Math.round(14 + riceRatio * 30)) }).map((_, i) => {
+              const seed = i * 7.919 + 3;
+              const rad = ((seed * 0.23) % 1);
+              const a = (i / 30) * Math.PI * 2 + seed * 0.05;
+              const gx = AREA_W/2 + Math.cos(a) * riceSize * 0.62 * rad;
+              const gy = AREA_H/2 - 22 + Math.sin(a) * riceSize * 0.34 * rad;
+              const rot = (seed * 51) % 180;
+              const fillBase = inIdealZone ? "#bbf7d0" : "#fffef7";
+              return (
+                <ellipse key={`g${i}`}
+                  cx={gx} cy={gy} rx={3} ry={1.5}
+                  fill={fillBase}
+                  stroke={inIdealZone ? "rgba(22,163,74,0.5)" : "rgba(180,100,30,0.35)"}
+                  strokeWidth={0.5}
+                  transform={`rotate(${rot} ${gx} ${gy})`} />
+              );
+            })}
+            {/* ハイライト */}
+            <ellipse cx={AREA_W / 2 - 6} cy={AREA_H / 2 - 28}
+              rx={riceSize * 0.28} ry={riceSize * 0.08}
+              fill="rgba(255,255,255,0.75)" />
+          </g>
         )}
 
         {/* サイズゲージ */}
@@ -1585,21 +1601,18 @@ function NigiriRiceArea({ fish, riceRatio, isActive, onStart, onEnd }: NigiriRic
   );
 }
 
-// ── 5. ピンチ ──
+// ── 5. ネタ合わせ（縦ドラッグ） ──
 interface NigiriPinchAreaProps {
   isActive: boolean;
   pinchSamples?: number[];
   pinchStartDist?: number;
-  onTouchStart: (e: React.TouchEvent) => void;
-  onTouchMove: (e: React.TouchEvent) => void;
-  onTouchEnd: () => void;
-  onMouseDown: (e: React.MouseEvent) => void;
-  onMouseMove: (e: React.MouseEvent) => void;
-  onMouseUp: () => void;
-  onMouseLeave: () => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
 }
 
-function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart, onTouchMove, onTouchEnd, onMouseDown, onMouseMove, onMouseUp, onMouseLeave }: NigiriPinchAreaProps) {
+function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onPointerDown, onPointerMove, onPointerUp, onPointerCancel }: NigiriPinchAreaProps) {
   const progress = isActive && pinchSamples && pinchStartDist && pinchSamples.length > 0
     ? Math.max(0, Math.min(1, 1 - pinchSamples[pinchSamples.length - 1] / pinchStartDist))
     : 0;
@@ -1609,13 +1622,11 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
     <div
       className="relative bg-gradient-to-b from-orange-50 to-amber-100 rounded-lg overflow-hidden select-none border-2 border-green-300 cursor-ns-resize"
       style={{ height: AREA_H, touchAction: "none" }}
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseLeave}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onPointerLeave={onPointerUp}
     >
       <svg {...SVG_PROPS}>
         {/* ネタ（上） */}
@@ -1634,20 +1645,16 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
         <text x={AREA_W / 2} y={AREA_H / 2 + gap / 2 + 14}
           textAnchor="middle" fontSize={9} fill="#92400e" fontWeight="bold">シャリ</text>
 
-        {/* ピンチ矢印 */}
+        {/* ドラッグ方向矢印（縦） */}
         {!isActive && (
           <>
-            <text x={AREA_W / 2 - 60} y={AREA_H / 2 + 7} fontSize={22}>👆</text>
-            <line x1={AREA_W / 2 - 42} y1={AREA_H / 2}
-                  x2={AREA_W / 2 - 12} y2={AREA_H / 2}
-                  stroke="#3b82f6" strokeWidth={2.5} />
-            <polygon points={`${AREA_W / 2 - 15},${AREA_H / 2 - 4} ${AREA_W / 2 - 8},${AREA_H / 2} ${AREA_W / 2 - 15},${AREA_H / 2 + 4}`}
+            <text x={AREA_W / 2 + 72} y={AREA_H / 2 - 12} fontSize={20}>👆</text>
+            <line x1={AREA_W / 2 + 80} y1={AREA_H / 2 - 24}
+                  x2={AREA_W / 2 + 80} y2={AREA_H / 2 + 18}
+                  stroke="#3b82f6" strokeWidth={2.5} strokeDasharray="4 3" />
+            <polygon points={`${AREA_W / 2 + 76},${AREA_H / 2 + 14} ${AREA_W / 2 + 80},${AREA_H / 2 + 22} ${AREA_W / 2 + 84},${AREA_H / 2 + 14}`}
               fill="#3b82f6" />
-            <text x={AREA_W / 2 + 42} y={AREA_H / 2 + 7} fontSize={22}>👆</text>
-            <line x1={AREA_W / 2 + 42} y1={AREA_H / 2}
-                  x2={AREA_W / 2 + 12} y2={AREA_H / 2}
-                  stroke="#3b82f6" strokeWidth={2.5} />
-            <polygon points={`${AREA_W / 2 + 15},${AREA_H / 2 - 4} ${AREA_W / 2 + 8},${AREA_H / 2} ${AREA_W / 2 + 15},${AREA_H / 2 + 4}`}
+            <polygon points={`${AREA_W / 2 + 76},${AREA_H / 2 - 20} ${AREA_W / 2 + 80},${AREA_H / 2 - 28} ${AREA_W / 2 + 84},${AREA_H / 2 - 20}`}
               fill="#3b82f6" />
           </>
         )}
@@ -1670,7 +1677,7 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
         }`}>
           {isActive
             ? `合わせ中... ${Math.round(progress * 100)}%`
-            : "🤏 二本指ピンチで合わせる（PCは中央に向かって上下ドラッグ）"
+            : "👆 タップして上下にスッとドラッグ（指1本/マウス）"
           }
         </span>
       </div>
