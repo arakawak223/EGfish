@@ -258,37 +258,49 @@ export function playSESell() {
 export function playSEKnifeEntry() {
   const ctx = getAudioContext();
   const t = ctx.currentTime;
-  // 木を叩くような短いアタック
+  // 木を叩くような短いアタック（低音）
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = "sine";
   osc.frequency.setValueAtTime(280, t);
-  osc.frequency.exponentialRampToValueAtTime(80, t + 0.06);
-  gain.gain.setValueAtTime(0.3, t);
-  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.08);
+  osc.frequency.exponentialRampToValueAtTime(80, t + 0.08);
+  gain.gain.setValueAtTime(0.55, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.12);
   osc.connect(gain).connect(ctx.destination);
   osc.start(t);
-  osc.stop(t + 0.1);
+  osc.stop(t + 0.14);
+
+  // 倍音のコツッ感
+  const osc2 = ctx.createOscillator();
+  const gain2 = ctx.createGain();
+  osc2.type = "triangle";
+  osc2.frequency.setValueAtTime(620, t);
+  osc2.frequency.exponentialRampToValueAtTime(220, t + 0.05);
+  gain2.gain.setValueAtTime(0.25, t);
+  gain2.gain.exponentialRampToValueAtTime(0.01, t + 0.08);
+  osc2.connect(gain2).connect(ctx.destination);
+  osc2.start(t);
+  osc2.stop(t + 0.1);
 }
 
 // 骨に沿うスムーズな「スルスル」
 export function playSESmoothSlide() {
   const ctx = getAudioContext();
   const t = ctx.currentTime;
-  const bufferSize = ctx.sampleRate * 0.06;
+  const bufferSize = ctx.sampleRate * 0.08;
   const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
   const data = buffer.getChannelData(0);
   for (let i = 0; i < bufferSize; i++) {
-    data[i] = (Math.random() * 2 - 1) * 0.08 * (1 - i / bufferSize);
+    data[i] = (Math.random() * 2 - 1) * 0.5 * (1 - i / bufferSize);
   }
   const source = ctx.createBufferSource();
   const filter = ctx.createBiquadFilter();
   const gain = ctx.createGain();
   source.buffer = buffer;
   filter.type = "highpass";
-  filter.frequency.value = 4000;
-  gain.gain.setValueAtTime(0.08, t);
-  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.06);
+  filter.frequency.value = 3200;
+  gain.gain.setValueAtTime(0.32, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.08);
   source.connect(filter).connect(gain).connect(ctx.destination);
   source.start(t);
 }
@@ -300,71 +312,132 @@ export function playSEBoneResist() {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = "sawtooth";
-  osc.frequency.setValueAtTime(400, t);
-  osc.frequency.setValueAtTime(250, t + 0.03);
-  osc.frequency.setValueAtTime(450, t + 0.06);
-  gain.gain.setValueAtTime(0.15, t);
-  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+  osc.frequency.setValueAtTime(420, t);
+  osc.frequency.setValueAtTime(260, t + 0.03);
+  osc.frequency.setValueAtTime(480, t + 0.06);
+  gain.gain.setValueAtTime(0.45, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.12);
   osc.connect(gain).connect(ctx.destination);
   osc.start(t);
-  osc.stop(t + 0.1);
+  osc.stop(t + 0.14);
+
+  // ノイズで粗さを足す
+  const bufferSize = ctx.sampleRate * 0.08;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize) * 0.6;
+  }
+  const noise = ctx.createBufferSource();
+  const noiseFilter = ctx.createBiquadFilter();
+  const noiseGain = ctx.createGain();
+  noise.buffer = buffer;
+  noiseFilter.type = "bandpass";
+  noiseFilter.frequency.value = 1600;
+  noiseGain.gain.setValueAtTime(0.25, t);
+  noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+  noise.connect(noiseFilter).connect(noiseGain).connect(ctx.destination);
+  noise.start(t);
 }
 
 // シャリを掴む「サクッ」
 export function playSERiceGrab() {
   const ctx = getAudioContext();
   const t = ctx.currentTime;
-  const bufferSize = ctx.sampleRate * 0.08;
+  const bufferSize = ctx.sampleRate * 0.12;
   const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
   const data = buffer.getChannelData(0);
   for (let i = 0; i < bufferSize; i++) {
     const env = i < bufferSize * 0.2 ? i / (bufferSize * 0.2) : 1 - (i - bufferSize * 0.2) / (bufferSize * 0.8);
-    data[i] = (Math.random() * 2 - 1) * env * 0.25;
+    data[i] = (Math.random() * 2 - 1) * env * 0.8;
   }
   const source = ctx.createBufferSource();
   const filter = ctx.createBiquadFilter();
   const gain = ctx.createGain();
   source.buffer = buffer;
   filter.type = "bandpass";
-  filter.frequency.value = 3000;
-  gain.gain.setValueAtTime(0.15, t);
+  filter.frequency.value = 2800;
+  gain.gain.setValueAtTime(0.45, t);
   source.connect(filter).connect(gain).connect(ctx.destination);
   source.start(t);
+
+  // 掴み取った確認音
+  const osc = ctx.createOscillator();
+  const g2 = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(520, t);
+  osc.frequency.exponentialRampToValueAtTime(360, t + 0.08);
+  g2.gain.setValueAtTime(0.18, t);
+  g2.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+  osc.connect(g2).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.12);
 }
 
 // ネタを合わせる「ペタッ」
 export function playSENetaCombine() {
   const ctx = getAudioContext();
   const t = ctx.currentTime;
+  // 低音のペタッ
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = "sine";
-  osc.frequency.setValueAtTime(500, t);
-  osc.frequency.exponentialRampToValueAtTime(200, t + 0.05);
-  gain.gain.setValueAtTime(0.15, t);
-  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.07);
+  osc.frequency.setValueAtTime(520, t);
+  osc.frequency.exponentialRampToValueAtTime(180, t + 0.06);
+  gain.gain.setValueAtTime(0.45, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
   osc.connect(gain).connect(ctx.destination);
   osc.start(t);
-  osc.stop(t + 0.08);
+  osc.stop(t + 0.12);
+
+  // 粘っこいアタック
+  const bufferSize = ctx.sampleRate * 0.04;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize) * 0.5;
+  }
+  const noise = ctx.createBufferSource();
+  const nf = ctx.createBiquadFilter();
+  const ng = ctx.createGain();
+  noise.buffer = buffer;
+  nf.type = "lowpass";
+  nf.frequency.value = 900;
+  ng.gain.setValueAtTime(0.2, t);
+  ng.gain.exponentialRampToValueAtTime(0.01, t + 0.05);
+  noise.connect(nf).connect(ng).connect(ctx.destination);
+  noise.start(t);
 }
 
 // 握り完成の完璧な「フワッ」
 export function playSENigiriPerfect() {
   const ctx = getAudioContext();
   const t = ctx.currentTime;
-  // 柔らかいベル音 + エアリーなパッド
-  [523, 659, 784].forEach((freq, i) => { // C5, E5, G5
+  // 柔らかいベル音（メイン）
+  [523, 659, 784, 1047].forEach((freq, i) => { // C5, E5, G5, C6
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
     osc.frequency.value = freq;
-    const start = t + i * 0.05;
+    const start = t + i * 0.06;
     gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(0.12, start + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.01, start + 0.3);
+    gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, start + 0.45);
     osc.connect(gain).connect(ctx.destination);
     osc.start(start);
-    osc.stop(start + 0.3);
+    osc.stop(start + 0.45);
+
+    // 倍音で厚み
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = "triangle";
+    osc2.frequency.value = freq * 2;
+    gain2.gain.setValueAtTime(0, start);
+    gain2.gain.linearRampToValueAtTime(0.1, start + 0.02);
+    gain2.gain.exponentialRampToValueAtTime(0.01, start + 0.3);
+    osc2.connect(gain2).connect(ctx.destination);
+    osc2.start(start);
+    osc2.stop(start + 0.3);
   });
 }
 
@@ -375,13 +448,31 @@ export function playSENigiriFail() {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = "triangle";
-  osc.frequency.setValueAtTime(200, t);
-  osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
-  gain.gain.setValueAtTime(0.12, t);
-  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+  osc.frequency.setValueAtTime(220, t);
+  osc.frequency.exponentialRampToValueAtTime(70, t + 0.18);
+  gain.gain.setValueAtTime(0.4, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.25);
   osc.connect(gain).connect(ctx.destination);
   osc.start(t);
-  osc.stop(t + 0.2);
+  osc.stop(t + 0.26);
+
+  // ぶしゃっ感のローノイズ
+  const bufferSize = ctx.sampleRate * 0.15;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize) * 0.6;
+  }
+  const noise = ctx.createBufferSource();
+  const nf = ctx.createBiquadFilter();
+  const ng = ctx.createGain();
+  noise.buffer = buffer;
+  nf.type = "lowpass";
+  nf.frequency.value = 600;
+  ng.gain.setValueAtTime(0.22, t);
+  ng.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+  noise.connect(nf).connect(ng).connect(ctx.destination);
+  noise.start(t);
 }
 
 // 糸切れ: 「パンッ」

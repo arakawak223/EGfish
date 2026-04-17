@@ -92,9 +92,9 @@ function getIdealRiceRatio(size: "small" | "medium" | "large"): number {
 
 function getIdealPressRange(size: "small" | "medium" | "large"): [number, number] {
   switch (size) {
-    case "small": return [0.18, 0.45];
-    case "medium": return [0.30, 0.62];
-    case "large": return [0.42, 0.75];
+    case "small": return [0.22, 0.40];
+    case "medium": return [0.38, 0.56];
+    case "large": return [0.56, 0.74];
   }
 }
 
@@ -136,16 +136,22 @@ function scoreArcFollowing(
 }
 
 function scorePinch(samples: number[]): number {
-  if (samples.length < 3) return 0;
+  if (samples.length < 4) return 0;
   const start = samples[0];
   const end = samples[samples.length - 1];
-  const closedRatio = Math.max(0, Math.min(1, (start - end) / (start * 0.6)));
+  // しっかり縮めきれないと急落（残り距離の影響大）
+  const closedRatio = Math.max(0, Math.min(1, (start - end) / (start * 0.85)));
+  // 逆方向に戻したらペナルティ
   let monotone = 0;
+  let reversalPenalty = 0;
   for (let i = 1; i < samples.length; i++) {
-    if (samples[i] <= samples[i - 1] + 5) monotone++;
+    const delta = samples[i] - samples[i - 1];
+    if (delta <= 2) monotone++;
+    if (delta > 6) reversalPenalty += 0.05;
   }
   const smoothness = monotone / (samples.length - 1);
-  return closedRatio * 0.6 + smoothness * 0.4;
+  const raw = closedRatio * 0.7 + smoothness * 0.3 - reversalPenalty;
+  return Math.max(0, Math.min(1, raw));
 }
 
 // ── チュートリアルガイド ──
@@ -154,7 +160,7 @@ const TUTORIAL_STEPS = [
   { icon: "🦴", title: "2. 中骨に沿う",   desc: "骨ラインをゆっくり右へスワイプ" },
   { icon: "🔻", title: "3. 腹骨をすく",   desc: "弧のガイドに沿ってスワイプ" },
   { icon: "🍚", title: "4. シャリを取る", desc: "長押し → 緑ゾーンで離す" },
-  { icon: "🤏", title: "5. ネタと合わせ", desc: "二本指ピンチ（PCはクリック）" },
+  { icon: "🤏", title: "5. ネタと合わせ", desc: "二本指ピンチ or 上下ドラッグ" },
   { icon: "🤲", title: "6. 本手返し",     desc: "長押し → 緑ゾーンで離す" },
 ];
 
@@ -690,7 +696,10 @@ export default function CookingGame({
     const idealRatio = getIdealRiceRatio(stage.size);
 
     const diff = Math.abs(ratio - idealRatio);
-    const riceScore = Math.max(0, Math.min(1, 1 - diff / 0.35));
+    // 緑ゾーン ±0.06 で満点、±0.18 で 0点（外すと急落）
+    const riceScore = diff <= 0.06
+      ? 1
+      : Math.max(0, 1 - (diff - 0.06) / 0.12);
 
     playSERiceGrab();
     vibrate(HAPTIC_PATTERNS.riceGrab);
@@ -753,10 +762,49 @@ export default function CookingGame({
     finishPinch(fish.id, pinchScore);
   }, []);
 
-  // PC用: クリックで合わせ完了
-  const handlePinchClick = useCallback((fish: CaughtFish) => {
-    if (activePhaseRef.current?.phase === "nigiri-pinch") return;
-    const pinchScore = 0.75;
+  // PC用: マウスドラッグでネタとシャリを寄せる
+  const handlePinchMouseDown = useCallback((fish: CaughtFish, e: React.MouseEvent) => {
+    if (activePhaseRef.current) return;
+    e.preventDefault();
+    activePhaseRef.current = {
+      fishId: fish.id,
+      phase: "nigiri-pinch",
+      startTime: performance.now(),
+      pinchSamples: [PINCH_INITIAL_DIST],
+      pinchStartDist: PINCH_INITIAL_DIST,
+      pinchComplete: false,
+    };
+    activeRectRef.current = e.currentTarget.getBoundingClientRect();
+    vibrate([6]);
+    forceTick();
+  }, [forceTick]);
+
+  const handlePinchMouseMove = useCallback((e: React.MouseEvent) => {
+    const active = activePhaseRef.current;
+    const rect = activeRectRef.current;
+    if (!active || active.phase !== "nigiri-pinch" || active.pinchComplete || !rect) return;
+    // 垂直方向の中心からの距離 × 2 を擬似的な「二本指間距離」として扱う
+    const centerY = rect.top + rect.height / 2;
+    const dy = Math.abs(e.clientY - centerY);
+    const d = Math.max(PINCH_COMPLETE_DIST * 0.6, Math.min(PINCH_INITIAL_DIST, dy * 2));
+    active.pinchSamples!.push(d);
+
+    if (d < PINCH_COMPLETE_DIST) {
+      active.pinchComplete = true;
+      const pinchScore = scorePinch(active.pinchSamples!);
+      finishPinch(active.fishId, pinchScore);
+    }
+    forceTick();
+  }, [forceTick]);
+
+  const handlePinchMouseUp = useCallback((fish: CaughtFish) => {
+    const active = activePhaseRef.current;
+    if (!active || active.phase !== "nigiri-pinch" || active.fishId !== fish.id) return;
+    if (active.pinchComplete) return;
+    // 途中離しはスコア減衰
+    const pinchScore = active.pinchSamples && active.pinchSamples.length > 3
+      ? scorePinch(active.pinchSamples) * 0.6
+      : 0;
     finishPinch(fish.id, pinchScore);
   }, []);
 
@@ -802,10 +850,12 @@ export default function CookingGame({
       if (ratio >= lo && ratio <= hi) {
         const center = (lo + hi) / 2;
         const halfRange = (hi - lo) / 2;
-        pressScore = 1 - Math.abs(ratio - center) / halfRange * 0.15;
+        // 緑ゾーン内でも中心から離れると少し減点
+        pressScore = 1 - Math.abs(ratio - center) / halfRange * 0.2;
       } else {
+        // ゾーン外は急落（0.18離れて0点）
         const distToRange = ratio < lo ? lo - ratio : ratio - hi;
-        pressScore = Math.max(0, 1 - distToRange / 0.4);
+        pressScore = Math.max(0, 1 - distToRange / 0.18);
       }
       pressScore = Math.max(0, Math.min(1, pressScore));
 
@@ -1110,7 +1160,10 @@ export default function CookingGame({
                   onTouchStart={(e) => handlePinchStart(fish, e)}
                   onTouchMove={handlePinchMove}
                   onTouchEnd={() => handlePinchEnd(fish)}
-                  onClick={() => handlePinchClick(fish)}
+                  onMouseDown={(e) => handlePinchMouseDown(fish, e)}
+                  onMouseMove={handlePinchMouseMove}
+                  onMouseUp={() => handlePinchMouseUp(fish)}
+                  onMouseLeave={() => handlePinchMouseUp(fish)}
                 />
               ) : currentState === "nigiri-press" ? (
                 <NigiriPressArea
@@ -1456,8 +1509,8 @@ function NigiriRiceArea({ fish, riceRatio, isActive, onStart, onEnd }: NigiriRic
   const fishData = FISH_DATABASE[fish.species];
   const stage = fishData.stages[fish.stageIndex];
   const idealRatio = getIdealRiceRatio(stage.size);
-  const idealMin = idealRatio - 0.10;
-  const idealMax = idealRatio + 0.10;
+  const idealMin = idealRatio - 0.06;
+  const idealMax = idealRatio + 0.06;
   const inIdealZone = riceRatio >= idealMin && riceRatio <= idealMax;
   const riceSize = 20 + riceRatio * 50;
 
@@ -1540,10 +1593,13 @@ interface NigiriPinchAreaProps {
   onTouchStart: (e: React.TouchEvent) => void;
   onTouchMove: (e: React.TouchEvent) => void;
   onTouchEnd: () => void;
-  onClick: () => void;
+  onMouseDown: (e: React.MouseEvent) => void;
+  onMouseMove: (e: React.MouseEvent) => void;
+  onMouseUp: () => void;
+  onMouseLeave: () => void;
 }
 
-function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart, onTouchMove, onTouchEnd, onClick }: NigiriPinchAreaProps) {
+function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart, onTouchMove, onTouchEnd, onMouseDown, onMouseMove, onMouseUp, onMouseLeave }: NigiriPinchAreaProps) {
   const progress = isActive && pinchSamples && pinchStartDist && pinchSamples.length > 0
     ? Math.max(0, Math.min(1, 1 - pinchSamples[pinchSamples.length - 1] / pinchStartDist))
     : 0;
@@ -1551,12 +1607,15 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
 
   return (
     <div
-      className="relative bg-gradient-to-b from-orange-50 to-amber-100 rounded-lg overflow-hidden select-none border-2 border-green-300 cursor-pointer"
+      className="relative bg-gradient-to-b from-orange-50 to-amber-100 rounded-lg overflow-hidden select-none border-2 border-green-300 cursor-ns-resize"
       style={{ height: AREA_H, touchAction: "none" }}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      onClick={onClick}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseLeave}
     >
       <svg {...SVG_PROPS}>
         {/* ネタ（上） */}
@@ -1611,7 +1670,7 @@ function NigiriPinchArea({ isActive, pinchSamples, pinchStartDist, onTouchStart,
         }`}>
           {isActive
             ? `合わせ中... ${Math.round(progress * 100)}%`
-            : "🤏 二本指ピンチで合わせる（PCはクリック）"
+            : "🤏 二本指ピンチで合わせる（PCは中央に向かって上下ドラッグ）"
           }
         </span>
       </div>
