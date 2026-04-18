@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Trophy, ArrowLeft } from "lucide-react";
+import { apiUrl } from "@/lib/api-url";
 
 interface RankingEntry {
   name: string;
@@ -26,7 +27,7 @@ export default function RankingBoard({ playerName, onClose }: RankingBoardProps)
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/rankings")
+    fetch(apiUrl("/api/rankings"))
       .then((res) => res.json())
       .then((data) => {
         setRankings(data.rankings ?? []);

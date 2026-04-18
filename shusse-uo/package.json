@@ -6,9 +6,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "build:native": "node scripts/build-native.mjs",
+    "cap:add:ios": "cap add ios",
+    "cap:sync": "cap sync ios",
+    "cap:open:ios": "cap open ios",
+    "ios": "npm run build:native && npm run cap:sync && npm run cap:open:ios"
   },
   "dependencies": {
+    "@capacitor/core": "^7.6.2",
+    "@capacitor/haptics": "^7.0.5",
     "@vercel/kv": "^3.0.0",
     "lucide-react": "^1.7.0",
     "next": "16.2.2",
@@ -16,6 +23,8 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.2",
+    "@capacitor/ios": "^7.6.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

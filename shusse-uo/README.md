@@ -34,3 +34,45 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## iOSアプリ版（Capacitor）
+
+iOS Safari は Vibration API 未対応のため、Taptic Engine を使いたい場合は Capacitor 経由でネイティブ化する。Mac + Xcode 16+ が必須。
+
+### 1. 初回だけ（Macで実行）
+
+```bash
+# ランキングAPIはWeb版(Vercel)を叩くのでベースURLを指定
+echo 'NEXT_PUBLIC_API_BASE_URL=https://<your-vercel-app>.vercel.app' > .env.local
+
+npm install
+npm run build:native        # out/ を生成（src/app/apiは一時退避される）
+npm run cap:add:ios         # ios/ プロジェクトを生成
+npm run cap:sync            # out/ を iOS プロジェクトに同期
+```
+
+### 2. 実機ビルド
+
+```bash
+npm run ios                 # build:native → cap:sync → Xcodeを開く
+```
+
+Xcodeが開いたら Signing & Capabilities で Team を選択し、iPhoneを繋いで再生ボタン。
+
+### 3. アイコン / スプラッシュ差し替え
+
+`ios/App/App/Assets.xcassets/AppIcon.appiconset/` と `ios/App/App/Assets.xcassets/Splash.imageset/` を編集。
+
+### ハプティクス仕様
+
+`src/lib/haptics.ts` の `vibrate(pattern)` はCapacitorネイティブ時に `classifyPattern()` で配列を解析し、
+`Haptics.impact({ style })` または `Haptics.notification({ type })` にマッピングする。Web版はVibration APIのまま。
+
+| パターンの特徴 | ネイティブ出力 |
+| --- | --- |
+| 5連以上 × maxMs ≥ 100 | Notification.Success |
+| 4連 × maxMs ≤ 40 | Notification.Warning |
+| maxMs ≥ 150 | Impact.Heavy |
+| maxMs ≥ 50 | Impact.Medium |
+| それ以外 | Impact.Light |
+

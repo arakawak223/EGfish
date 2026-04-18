@@ -10,6 +10,7 @@ import {
   getSeasonMultiplier,
 } from "@/lib/fish-data";
 import { vibrateFishSpecific, vibrateMiss, vibrate, HAPTIC_PATTERNS } from "@/lib/haptics";
+import { apiUrl } from "@/lib/api-url";
 import { playBGM, stopBGM, playSEHit, playSECatch, playSEMiss } from "@/lib/audio";
 import {
   GameState,
@@ -448,7 +449,7 @@ export default function FishingGame() {
   // ランキング送信（リザルト画面表示時）
   const submitRanking = useCallback(() => {
     if (!playerName) return;
-    fetch("/api/rankings", {
+    fetch(apiUrl("/api/rankings"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
