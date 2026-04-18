@@ -1,6 +1,9 @@
 // 速度設定: 釣りの回転 / 調理のカット
 export type SpeedLevel = "slow" | "normal" | "fast";
 
+// 釣りモード: 既存のタイミングリング / 触覚探索
+export type FishingMode = "classic" | "haptic";
+
 // 釣りの針回転速度倍率。現状実装が「遅め」基準なので slow=1.0
 // 体感が遅めという要望で 3段階すべてを底上げ
 export const FISHING_SPEED_MULT: Record<SpeedLevel, number> = {
@@ -21,6 +24,7 @@ export const COOKING_TIME_MULT: Record<SpeedLevel, number> = {
 export interface GameSettings {
   fishingSpeed: SpeedLevel;
   cookingSpeed: SpeedLevel;
+  fishingMode: FishingMode;
 }
 
 const STORAGE_KEY = "shusse-uo-settings";
@@ -28,6 +32,7 @@ const STORAGE_KEY = "shusse-uo-settings";
 export const DEFAULT_SETTINGS: GameSettings = {
   fishingSpeed: "slow",
   cookingSpeed: "fast",
+  fishingMode: "classic",
 };
 
 export function loadSettings(): GameSettings {
@@ -39,6 +44,7 @@ export function loadSettings(): GameSettings {
     return {
       fishingSpeed: parsed.fishingSpeed ?? DEFAULT_SETTINGS.fishingSpeed,
       cookingSpeed: parsed.cookingSpeed ?? DEFAULT_SETTINGS.cookingSpeed,
+      fishingMode: parsed.fishingMode ?? DEFAULT_SETTINGS.fishingMode,
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -58,4 +64,14 @@ export const SPEED_LABEL: Record<SpeedLevel, string> = {
   slow: "遅め",
   normal: "普通",
   fast: "速め",
+};
+
+export const FISHING_MODE_LABEL: Record<FishingMode, string> = {
+  classic: "タイミングリング",
+  haptic: "触覚探索（Spot & Timing）",
+};
+
+export const FISHING_MODE_DESC: Record<FishingMode, string> = {
+  classic: "回転する針を当たりゾーンでタップ",
+  haptic: "指で海面を探り、魚の気配を感じたら即タップ",
 };

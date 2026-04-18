@@ -22,6 +22,7 @@ import WaterSurface from "./WaterSurface";
 import ParallaxLayers from "./ParallaxLayers";
 import FishSilhouette from "./FishSilhouette";
 import FightOverlay from "./FightOverlay";
+import HapticFishingOverlay, { ProbeFish } from "./HapticFishingOverlay";
 import CookingGame from "./CookingGame";
 import LoginScreen from "./LoginScreen";
 import RankingBoard from "./RankingBoard";
@@ -31,12 +32,15 @@ import MarketView from "./MarketView";
 import {
   GameSettings,
   SpeedLevel,
+  FishingMode,
   DEFAULT_SETTINGS,
   loadSettings,
   saveSettings,
   FISHING_SPEED_MULT,
   COOKING_TIME_MULT,
   SPEED_LABEL,
+  FISHING_MODE_LABEL,
+  FISHING_MODE_DESC,
 } from "@/lib/game-settings";
 
 interface SwimmingFish {
@@ -300,6 +304,31 @@ export default function FishingGame() {
     [gameState.phase, fishes, fightTarget, paused]
   );
 
+  // ── 触覚モード: 噛みつき開始 / フッキング成功 / バラシ ──
+  const handleHapticBiteStart = useCallback((fish: ProbeFish) => {
+    setFishes((prev) => prev.map((f) => f.id === fish.id ? { ...f, vx: 0, vy: 0, vDepth: 0 } : f));
+    setMessage("ガツン！— 今すぐタップ！");
+  }, []);
+
+  const handleHapticHook = useCallback((fish: ProbeFish) => {
+    const target = fishes.find((f) => f.id === fish.id);
+    if (!target) return;
+    const fishData = FISH_DATABASE[target.species];
+    const stage = fishData.stages[target.stageIndex];
+    playSEHit();
+    setCatchAnimation({ fish: target, success: true });
+    setFightTarget(target);
+    setMessage(`${stage.name}（${fishData.displayName}）がヒット！巻き上げろ！`);
+    setTimeout(() => setCatchAnimation(null), 800);
+  }, [fishes]);
+
+  const handleHapticBarashi = useCallback((fish: ProbeFish | null) => {
+    if (fish) setFishes((prev) => prev.filter((f) => f.id !== fish.id));
+    playSEMiss();
+    setMessage("バラシ！タップが遅れた...");
+    setTimeout(() => setMessage(""), 1800);
+  }, []);
+
   // ファイト成功: 魚をキャッチ
   const handleFightSuccess = useCallback(() => {
     if (!fightTarget) return;
@@ -520,6 +549,11 @@ export default function FishingGame() {
               value={settings.cookingSpeed}
               onChange={(v) => updateSettings({ cookingSpeed: v })}
             />
+            <div className="h-3" />
+            <FishingModePicker
+              value={settings.fishingMode}
+              onChange={(v) => updateSettings({ fishingMode: v })}
+            />
             <p className="text-[10px] text-blue-300/80 mt-2 text-center">
               プレイ中でも ⚙ ボタンから変更できます
             </p>
@@ -723,8 +757,8 @@ export default function FishingGame() {
         {gameState.phase === "fishing" && (
           <div
             className="w-full h-full relative"
-            onClick={handleWaterClick}
-            onTouchStart={handleWaterClick}
+            onClick={settings.fishingMode === "classic" ? handleWaterClick : undefined}
+            onTouchStart={settings.fishingMode === "classic" ? handleWaterClick : undefined}
           >
             {/* 水面エフェクト（Canvas: グラデ+光+パーティクル+波紋） */}
             <WaterSurface
@@ -792,6 +826,17 @@ export default function FishingGame() {
                   {catchAnimation.success ? "🎣 HIT!" : "💨 バラシ"}
                 </div>
               </div>
+            )}
+
+            {/* 触覚モード: Spot & Timing オーバーレイ */}
+            {settings.fishingMode === "haptic" && !fightTarget && (
+              <HapticFishingOverlay
+                fishes={fishes}
+                paused={paused}
+                onHook={handleHapticHook}
+                onBiteStart={handleHapticBiteStart}
+                onBarashi={handleHapticBarashi}
+              />
             )}
 
             {/* ファイトオーバーレイ */}
@@ -903,6 +948,12 @@ export default function FishingGame() {
               onChange={(v) => updateSettings({ cookingSpeed: v })}
               dark={false}
             />
+            <div className="h-3" />
+            <FishingModePicker
+              value={settings.fishingMode}
+              onChange={(v) => updateSettings({ fishingMode: v })}
+              dark={false}
+            />
             <p className="text-xs text-gray-500 mt-3 text-center">
               変更はすぐに反映されます
             </p>
@@ -915,6 +966,49 @@ export default function FishingGame() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// 釣りモード選択ピッカー
+function FishingModePicker({
+  value,
+  onChange,
+  dark = true,
+}: {
+  value: FishingMode;
+  onChange: (v: FishingMode) => void;
+  dark?: boolean;
+}) {
+  const modes: FishingMode[] = ["classic", "haptic"];
+  return (
+    <div>
+      <p className={`text-xs mb-1 ${dark ? "text-blue-200" : "text-gray-600"}`}>🎯 釣りアクション</p>
+      <div className="flex gap-1.5">
+        {modes.map((m) => {
+          const active = m === value;
+          const base = "flex-1 py-2 rounded-lg text-[11px] font-bold transition-all active:scale-95 leading-tight";
+          const activeCls = dark
+            ? "bg-orange-500 text-white shadow"
+            : "bg-blue-500 text-white shadow";
+          const inactiveCls = dark
+            ? "bg-white/10 text-blue-100 hover:bg-white/20"
+            : "bg-gray-100 text-gray-600 hover:bg-gray-200";
+          return (
+            <button
+              key={m}
+              onClick={() => onChange(m)}
+              className={`${base} ${active ? activeCls : inactiveCls}`}
+              title={FISHING_MODE_DESC[m]}
+            >
+              <div>{FISHING_MODE_LABEL[m]}</div>
+              <div className={`text-[9px] font-normal mt-0.5 ${active ? "opacity-90" : "opacity-60"}`}>
+                {FISHING_MODE_DESC[m]}
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
