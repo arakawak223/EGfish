@@ -80,6 +80,7 @@ export default function FishingGame() {
   const [settings, setSettings] = useState<GameSettings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [fishingAttempt, setFishingAttempt] = useState(0); // 触覚オーバーレイの再マウント用
   const containerRef = useRef<HTMLDivElement>(null);
   const fishIdCounter = useRef(0);
   const pauseStartRef = useRef<number | null>(null);
@@ -311,8 +312,18 @@ export default function FishingGame() {
   }, []);
 
   const handleHapticHook = useCallback((fish: ProbeFish) => {
-    const target = fishes.find((f) => f.id === fish.id);
-    if (!target) return;
+    // 魚が何らかの理由で消えていても biteFish データからフォールバック合成
+    const found = fishes.find((f) => f.id === fish.id);
+    const target: SwimmingFish = found ?? {
+      id: fish.id,
+      species: fish.species,
+      stageIndex: fish.stageIndex,
+      x: fish.x,
+      y: fish.y,
+      depth: fish.depth,
+      vx: 0, vy: 0, vDepth: 0,
+      spawnTime: Date.now(),
+    };
     const fishData = FISH_DATABASE[target.species];
     const stage = fishData.stages[target.stageIndex];
     playSEHit();
@@ -327,6 +338,8 @@ export default function FishingGame() {
     playSEMiss();
     setMessage("バラシ！タップが遅れた...");
     setTimeout(() => setMessage(""), 1800);
+    // 失敗でもオーバーレイをフレッシュに入れ替え
+    setFishingAttempt((c) => c + 1);
   }, []);
 
   // ファイト成功: 魚をキャッチ
@@ -367,6 +380,7 @@ export default function FishingGame() {
 
     setFishes((prev) => prev.filter((f) => f.id !== fightTarget.id));
     setFightTarget(null);
+    setFishingAttempt((c) => c + 1);
     setTimeout(() => setMessage(""), 2500);
   }, [fightTarget]);
 
@@ -378,6 +392,7 @@ export default function FishingGame() {
     playSEMiss();
     setFishes((prev) => prev.filter((f) => f.id !== fightTarget.id));
     setFightTarget(null);
+    setFishingAttempt((c) => c + 1);
     setTimeout(() => setMessage(""), 2000);
   }, [fightTarget]);
 
@@ -828,9 +843,11 @@ export default function FishingGame() {
               </div>
             )}
 
-            {/* 触覚モード: Spot & Timing オーバーレイ */}
+            {/* 触覚モード: Spot & Timing オーバーレイ
+                各試行ごとに key を更新して必ずフレッシュマウント */}
             {settings.fishingMode === "haptic" && !fightTarget && (
               <HapticFishingOverlay
+                key={`haptic-${fishingAttempt}`}
                 fishes={fishes}
                 paused={paused}
                 onHook={handleHapticHook}

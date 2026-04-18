@@ -59,6 +59,15 @@ export default function HapticFishingOverlay({
     fn();
   }, []);
 
+  // マウント時に内部状態を完全リセット（セーフティ）
+  useEffect(() => {
+    resolvedRef.current = false;
+    hoverRef.current = null;
+    lastPulseRef.current = 0;
+    biteStartRef.current = 0;
+    probeRef.current = null;
+  }, []);
+
   // 外部 paused で状態リセット（探索中断）
   useEffect(() => {
     if (!paused) return;
