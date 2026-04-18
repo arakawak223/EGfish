@@ -21,6 +21,8 @@ interface Props {
   onHook: (fish: ProbeFish) => void;
   onBarashi: (fish: ProbeFish | null) => void;
   onBiteStart?: (fish: ProbeFish) => void;
+  // 親から増分されるソフトリセット用のID。値が変わると内部状態を完全リセット
+  attemptId?: number;
 }
 
 type Phase = "idle" | "probing" | "biting" | "resolved";
@@ -34,7 +36,7 @@ const BITE_HOLD_MS = 420;       // この時間一定距離以内に留まると
 const BITE_TAP_WINDOW_MS = 900; // ガツン！後のタップ受付猶予
 
 export default function HapticFishingOverlay({
-  fishes, paused, onHook, onBarashi, onBiteStart,
+  fishes, paused, onHook, onBarashi, onBiteStart, attemptId = 0,
 }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [probe, setProbe] = useState<{ x: number; y: number } | null>(null);
@@ -59,14 +61,19 @@ export default function HapticFishingOverlay({
     fn();
   }, []);
 
-  // マウント時に内部状態を完全リセット（セーフティ）
+  // attemptId の変化ごとに内部状態を完全リセット（マウント時にも発火）
   useEffect(() => {
     resolvedRef.current = false;
     hoverRef.current = null;
     lastPulseRef.current = 0;
     biteStartRef.current = 0;
     probeRef.current = null;
-  }, []);
+    setPhase("idle");
+    setProbe(null);
+    setBiteFish(null);
+    setBiteWindowRemaining(1);
+    setNearestDist(Infinity);
+  }, [attemptId]);
 
   // 外部 paused で状態リセット（探索中断）
   useEffect(() => {
@@ -172,9 +179,9 @@ export default function HapticFishingOverlay({
   }, [phase, paused, biteFish, onBarashi, resolveOnce]);
 
   // ── イベントハンドラ ──
+  // setPointerCapture は使わず、オーバーレイ上でのみイベントを受ける（タブ等他要素のタップを阻害しない）
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (paused || resolvedRef.current) return;
-    e.preventDefault();
 
     if (phase === "biting") {
       // 窓内タップ → フッキング成功
@@ -191,9 +198,6 @@ export default function HapticFishingOverlay({
     }
 
     // idle / probing: 探索開始
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const p = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     probeRef.current = p;
@@ -211,7 +215,8 @@ export default function HapticFishingOverlay({
     setProbe(p);
   }, [phase, paused]);
 
-  const handlePointerUp = useCallback(() => {
+  // 指がオーバーレイから離れたら常に探索を打ち切る（biting 中は状態維持）
+  const handlePointerUpOrLeave = useCallback(() => {
     if (phase === "probing") {
       setPhase("idle");
       setProbe(null);
@@ -237,9 +242,9 @@ export default function HapticFishingOverlay({
       style={{ touchAction: "none" }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      onPointerLeave={handlePointerUp}
+      onPointerUp={handlePointerUpOrLeave}
+      onPointerCancel={handlePointerUpOrLeave}
+      onPointerLeave={handlePointerUpOrLeave}
     >
       {/* 探索: 指先のソナー */}
       {phase === "probing" && probe && (

@@ -844,10 +844,10 @@ export default function FishingGame() {
             )}
 
             {/* 触覚モード: Spot & Timing オーバーレイ
-                各試行ごとに key を更新して必ずフレッシュマウント */}
+                attemptId で内部状態のソフトリセット（remount ではない） */}
             {settings.fishingMode === "haptic" && !fightTarget && (
               <HapticFishingOverlay
-                key={`haptic-${fishingAttempt}`}
+                attemptId={fishingAttempt}
                 fishes={fishes}
                 paused={paused}
                 onHook={handleHapticHook}
